@@ -15,6 +15,12 @@ export interface CredentialStore {
   hasSecret(key: string): Promise<boolean>;
 }
 
+/** Minimal provider lookup/update port satisfied structurally by ProviderRepository. */
+export interface ProviderConfigStore {
+  getById(id: ProviderId): ModelProviderConfig | null;
+  upsert(config: ModelProviderConfig): void;
+}
+
 export interface ModelMessagePart {
   type: 'text' | 'image_base64';
   text?: string;
@@ -22,11 +28,18 @@ export interface ModelMessagePart {
   dataBase64?: string;
 }
 
+export interface ModelToolInvocation {
+  callId: string;
+  name: string;
+  argumentsJson: string;
+}
+
 export interface ModelTurnMessage {
   role: 'system' | 'user' | 'assistant' | 'tool';
   content: string | ModelMessagePart[];
   toolCallId?: string;
   toolName?: string;
+  toolCalls?: ModelToolInvocation[];
 }
 
 export interface ModelToolSchema {
@@ -43,27 +56,26 @@ export interface ModelGenerateRequest {
   onDelta?: (delta: { textDelta?: string; reasoningDelta?: string }) => void;
 }
 
-export interface ModelToolInvocation {
-  callId: string;
-  name: string;
-  argumentsJson: string;
-}
-
 export interface ModelGenerateResponse {
   text: string;
   reasoning?: string;
   toolCalls: ModelToolInvocation[];
   usage: ModelUsage;
   finishReason: 'stop' | 'tool_calls' | 'length' | 'aborted' | 'error';
+  streamed: boolean;
 }
 
 export interface ModelProviderAdapter {
   readonly providerType: ModelProviderConfig['providerType'];
-  probeCapabilities(provider: ModelProviderConfig, apiKey: string, signal: AbortSignal): Promise<ModelCapabilities>;
+  probeCapabilities(
+    provider: ModelProviderConfig,
+    apiKey: string,
+    signal: AbortSignal,
+  ): Promise<ModelCapabilities>;
   generate(request: ModelGenerateRequest, apiKey: string): Promise<ModelGenerateResponse>;
 }
 
 export interface ModelRouter {
-  probe(providerId: ProviderId): Promise<ModelCapabilities>;
+  probe(providerId: ProviderId, signal?: AbortSignal): Promise<ModelCapabilities>;
   generate(request: ModelGenerateRequest): Promise<ModelGenerateResponse>;
 }
