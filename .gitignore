@@ -1,0 +1,39 @@
+# Dependencies
+node_modules/
+.pnpm-store/
+
+# Build outputs
+dist/
+build/
+out/
+release/
+*.tsbuildinfo
+
+# Local runtime data & secrets (NEVER commit user data, cookies, or keys)
+.jobhelper-data/
+data/
+*.db
+*.db-wal
+*.db-shm
+*.sqlite
+*.sqlite3
+.env
+.env.*
+!.env.example
+
+# Logs & traces
+logs/
+*.log
+npm-debug.log*
+playwright-report/
+test-results/
+coverage/
+
+# OS & editor artifacts
+.DS_Store
+Thumbs.db
+desktop.ini
+.vscode/*
+!.vscode/extensions.json
+!.vscode/settings.json
+.idea/

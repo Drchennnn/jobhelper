@@ -1,0 +1,17 @@
+{
+  "name": "@jobhelper/core",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "dependencies": {
+    "@jobhelper/contracts": "0.1.0",
+    "@jobhelper/storage": "0.1.0"
+  },
+  "scripts": {
+    "build": "tsc -b",
+    "typecheck": "tsc --noEmit",
+    "test": "echo \"[@jobhelper/core] domain service & lease tests implemented in M1/M2\""
+  }
+}

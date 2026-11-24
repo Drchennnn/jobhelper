@@ -1,0 +1,16 @@
+{
+  "name": "@jobhelper/skills",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "dependencies": {
+    "@jobhelper/contracts": "0.1.0"
+  },
+  "scripts": {
+    "build": "tsc -b",
+    "typecheck": "tsc --noEmit",
+    "test": "echo \"[@jobhelper/skills] skill catalog & matcher tests implemented in M3\""
+  }
+}

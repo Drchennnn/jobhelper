@@ -1,0 +1,25 @@
+{
+  "name": "jobhelper",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Local-first BYOK desktop job application assistant with human-in-the-loop browser control",
+  "type": "module",
+  "engines": {
+    "node": ">=22.12.0",
+    "npm": ">=10.0.0"
+  },
+  "workspaces": [
+    "packages/*",
+    "apps/*"
+  ],
+  "scripts": {
+    "dev:desktop": "npm --workspace @jobhelper/desktop run dev",
+    "dev:workbench": "npm --workspace @jobhelper/workbench run dev",
+    "build": "npm run build --workspaces --if-present",
+    "typecheck": "npm run typecheck --workspaces --if-present",
+    "test": "npm run test --workspaces --if-present",
+    "test:gate1": "echo \"[M5 Gate 1] Acceptance test harness not implemented yet. See docs/ACCEPTANCE_GATE1.md\"",
+    "lint": "npm run lint --workspaces --if-present",
+    "clean": "node -e \"console.log('Clean script placeholder — wire rimraf/fs.rm in M1')\""
+  }
+}

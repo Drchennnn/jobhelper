@@ -1,0 +1,16 @@
+{
+  "name": "@jobhelper/browser-bridge",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "dependencies": {
+    "@jobhelper/contracts": "0.1.0"
+  },
+  "scripts": {
+    "build": "tsc -b",
+    "typecheck": "tsc --noEmit",
+    "test": "echo \"[@jobhelper/browser-bridge] Scoped CDP & Submit Hard-Guard tests implemented in M2\""
+  }
+}
