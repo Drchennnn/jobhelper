@@ -1,12 +1,229 @@
+import crypto from 'node:crypto';
+import type { Epoch, EventId, IsoTimestamp, RunId, TaskId } from '@jobhelper/contracts';
+import {
+  DefaultSubmitHardGuard,
+  LocalScopedCdpBridge,
+  LocalTaskTabManager,
+  ScopedBrowserController,
+  type WebContentsViewFactory,
+} from '@jobhelper/browser-bridge';
+import {
+  LocalConfirmationService,
+  LocalMaterialService,
+  LocalProfileService,
+  LocalTaskScheduler,
+  LocalTaskService,
+  TaskControls,
+} from '@jobhelper/core';
+import { ByokModelRouter, type CredentialStore } from '@jobhelper/model-router';
+import { createSqliteStorage, type SqliteStorage } from '@jobhelper/storage';
+import { DesktopIpcRouter } from './ipc-router.js';
+import { WorkerProcessSupervisor, type WorkerChildTransport } from './worker-supervisor.js';
+
+export interface DesktopKernelOptions {
+  dbPath: string;
+  materialsRootDir: string;
+  credentials: CredentialStore;
+  viewFactory: WebContentsViewFactory;
+  spawnWorker: () => WorkerChildTransport;
+  workbenchOrigin?: string;
+  maxConcurrent?: number;
+  stopAckTimeoutMs?: number;
+}
+
+export interface DesktopMainKernel {
+  readonly storage: SqliteStorage;
+  readonly leases: TaskControls;
+  readonly profiles: LocalProfileService;
+  readonly materials: LocalMaterialService;
+  readonly confirmations: LocalConfirmationService;
+  readonly submitGuard: DefaultSubmitHardGuard;
+  readonly tabs: LocalTaskTabManager;
+  readonly cdpBridge: LocalScopedCdpBridge;
+  readonly browserController: ScopedBrowserController;
+  readonly modelRouter: ByokModelRouter;
+  readonly scheduler: LocalTaskScheduler;
+  readonly taskService: LocalTaskService;
+  readonly worker: WorkerProcessSupervisor;
+  readonly ipcRouter: DesktopIpcRouter;
+  start(): { recoveredTaskIds: TaskId[] };
+  shutdown(): Promise<void>;
+}
+
 /**
- * Electron Main Process Entry (M0 Architecture Placeholder).
- *
- * Planned bootstrap wiring (M2–M4):
- * 1. Initialize managed userData directories (db, materials, artifacts, skills, browser-profiles).
- * 2. Run SQLite migrations (@jobhelper/storage) and recover interrupted tasks on startup.
- * 3. Initialize CredentialStore (Electron safeStorage / DPAPI) & ProviderRepository.
- * 4. Instantiate TaskControls (epoch leases), ScopedCdpBridge, SubmitHardGuard, TaskTabManager.
- * 5. Spawn shared Agent Worker process and register typed IPC handlers (RendererToMainIpc).
- * 6. Create main BrowserWindow loading apps/workbench and attach WebContentsView manager.
+ * Main Process composition root uniting Storage, Core Services, Leases, Scoped CDP,
+ * Submit Hard-Guard, BYOK ModelRouter, Worker Supervisor, and Typed IPC Router.
  */
-export const DESKTOP_MAIN_BOOTSTRAP_PHASE = 'M2-M4' as const;
+export function createDesktopMainKernel(options: DesktopKernelOptions): DesktopMainKernel {
+  const storage = createSqliteStorage({ filename: options.dbPath });
+  const leases = new TaskControls();
+  const profiles = new LocalProfileService(storage.uow, storage.profiles, storage.preferences);
+  const materials = new LocalMaterialService(storage.uow, storage.profiles, {
+    rootDir: options.materialsRootDir,
+  });
+  const confirmations = new LocalConfirmationService(storage.uow, storage.hitl, storage.events);
+  const submitGuard = new DefaultSubmitHardGuard({ mode: 'manual_only' });
+  const modelRouter = new ByokModelRouter(storage.providers, options.credentials);
+
+  let cdpBridge!: LocalScopedCdpBridge;
+  let taskService!: LocalTaskService;
+  let worker!: WorkerProcessSupervisor;
+
+  const tabs = new LocalTaskTabManager({
+    viewFactory: options.viewFactory,
+    workbenchOrigin: options.workbenchOrigin,
+    onTabAdded: (tab) => {
+      void cdpBridge.notifyTabAdded(tab);
+    },
+    onTabRemoved: (tab) => {
+      cdpBridge.notifyTabRemoved(tab);
+    },
+    onRendererGone: (taskId) => {
+      void taskService.requestTakeover(taskId);
+    },
+  });
+
+  cdpBridge = new LocalScopedCdpBridge({
+    getTabs: (taskId) => tabs.getManagedTabs(taskId),
+    assertActive: (taskId, epoch) => leases.assert(taskId, epoch),
+    createTab: async (taskId, url) => {
+      const task = storage.tasks.getById(taskId);
+      if (!task) throw new Error(`任务不存在: ${taskId}`);
+      const info = await tabs.createTab(taskId, url, task.browserProfileId);
+      const managed = tabs.getManagedTabs(taskId).find((t) => t.id === info.id);
+      if (!managed) throw new Error('新建标签页不可用');
+      return managed;
+    },
+    selectTab: (taskId, tabId) => tabs.selectTab(taskId, tabId),
+    closeTab: (taskId, tabId) => tabs.closeTab(taskId, tabId),
+    workbenchOrigin: options.workbenchOrigin,
+  });
+
+  const browserController = new ScopedBrowserController({
+    tabs,
+    assertActive: (taskId, epoch) => leases.assert(taskId, epoch),
+    submitGuard,
+    workbenchOrigin: options.workbenchOrigin,
+  });
+
+  worker = new WorkerProcessSupervisor({
+    leases,
+    spawnWorker: options.spawnWorker,
+    onRevokeCdp: (taskId) => cdpBridge.revokeTask(taskId),
+    stopAckTimeoutMs: options.stopAckTimeoutMs,
+    onRpcRequest: async (taskId, epoch, method, params) => {
+      if (method === 'cdp_connect') {
+        return { wsEndpoint: await cdpBridge.issueEndpoint(taskId, epoch) };
+      }
+      throw new Error(`未实现的 Worker RPC 方法: ${method}`);
+    },
+    onRunStoppedAck: (taskId) => {
+      taskService.markTakeoverSettled(taskId);
+    },
+    onWorkerCrashed: (affectedTasks, reason) => {
+      const now = new Date().toISOString() as IsoTimestamp;
+      for (const taskId of affectedTasks) {
+        const task = storage.tasks.getById(taskId);
+        if (!task || task.executionState === 'closed') continue;
+        storage.events.append({
+          id: crypto.randomUUID() as EventId,
+          taskId,
+          type: 'system_notice',
+          payload: {
+            kind: 'worker_crash',
+            reason,
+            message: 'Agent Worker 异常退出，已立即收回浏览器控制权。请核对网页后手动继续，系统不会自动重放操作。',
+          },
+          createdAt: now,
+        });
+        taskService.transitionState({
+          taskId,
+          next: { executionState: 'error', waitingReason: 'manual_control' },
+          reason: 'worker_crash',
+          actor: 'system',
+        });
+      }
+    },
+  });
+
+  const scheduler = new LocalTaskScheduler(
+    leases,
+    {
+      isReadyToRun: () => worker.isReady,
+      onDispatch: async (taskId: TaskId, epoch: Epoch) => {
+        const runId = crypto.randomUUID() as RunId;
+        taskService.transitionState({
+          taskId,
+          next: { executionState: 'running', waitingReason: 'none' },
+          reason: `run_dispatched:${runId}`,
+          actor: 'system',
+        });
+        worker.startRun(taskId, runId, epoch);
+      },
+      onCancel: (taskId) => {
+        cdpBridge.revokeTask(taskId);
+      },
+    },
+    options.maxConcurrent ?? 3,
+  );
+
+  taskService = new LocalTaskService({
+    uow: storage.uow,
+    tasks: storage.tasks,
+    positions: storage.positions,
+    events: storage.events,
+    hitl: storage.hitl,
+    profiles,
+    confirmations,
+    leases,
+    scheduler,
+    workbenchOrigin: options.workbenchOrigin,
+    onRevokeAndStopWorker: (taskId, reason) => {
+      worker.stopTask(taskId, reason);
+    },
+    onDeliverQuestionAnswer: (taskId, questionCardId, answers) =>
+      worker.deliverQuestionReply(taskId, questionCardId, answers),
+    onTrySpliceMessage: (taskId, input) =>
+      worker.trySpliceMessage(taskId, input.clientMessageId, input.text),
+  });
+
+  const ipcRouter = new DesktopIpcRouter({
+    tasksRepo: storage.tasks,
+    eventsRepo: storage.events,
+    taskService,
+    confirmations,
+    tabs,
+    modelRouter,
+  });
+
+  return {
+    storage,
+    leases,
+    profiles,
+    materials,
+    confirmations,
+    submitGuard,
+    tabs,
+    cdpBridge,
+    browserController,
+    modelRouter,
+    scheduler,
+    taskService,
+    worker,
+    ipcRouter,
+    start() {
+      const recoveredTaskIds = taskService.recoverOnStartup();
+      worker.start();
+      return { recoveredTaskIds };
+    },
+    async shutdown() {
+      worker.shutdown();
+      leases.stop();
+      await cdpBridge.close();
+      storage.close();
+    },
+  };
+}
+
+export * from './ipc-router.js';
+export * from './worker-supervisor.js';
