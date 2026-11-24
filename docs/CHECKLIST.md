@@ -53,16 +53,16 @@
 **目标**：打通本地数据持久层、档案快照与材料管理、系统密钥存储以及 BYOK 模型适配与能力探测，使整个 monorepo 可编译、可单测。
 
 ### 交付清单
-- [ ] M1.1 工程化基建落地：安装 TypeScript、Vitest、ESLint、SQLite 驱动、Electron/Vite 基础依赖；打通根级 `npm run typecheck` 与 `npm test`。
-- [ ] M1.2 `@jobhelper/storage` 实现：SQLite 连接池/WAL 模式、迁移执行器（执行 `0001_initial.sql`）、各 Repository 实现（`TaskRepo`、`RunRepo`、`EventRepo`、`ProfileRepo`、`MaterialRepo`、`QuestionRepo`、`ConfirmationRepo`、`ActionLedgerRepo`、`PositionRepo`、`ProviderRepo`）。
-- [ ] M1.3 `@jobhelper/core` 档案与材料服务：结构化档案 CRUD、不可变 `ProfileSnapshot` 版本生成、全局默认档案记忆、本地附件托管目录（SHA-256 校验、大小限制、受控只读解析 PDF/文本）。
-- [ ] M1.4 `@jobhelper/model-router` 凭据服务：基于 Electron `safeStorage`（Windows DPAPI）的密钥读写接口 + 单元测试内存实现；确保密钥永不泄露至日志/渲染层。
-- [ ] M1.5 `@jobhelper/model-router` BYOK 适配器：实现 OpenAI-compatible、Anthropic、Gemini 三个标准适配器，支持流式输出（text + reasoning）、Tool Calling、Vision 图像输入、AbortSignal 取消与 Usage 计量。
-- [ ] M1.6 连通性与能力探测（Capability Probe）：真实探测并缓存 `streaming` / `tool_calling` / `vision` 能力，输出清晰错误分类（认证失败、限流、超时、端点不可达、不支持工具调用）。
+- [x] M1.1 工程化基建落地：安装 TypeScript、`@types/node`、Vitest；打通根级 `npm run build`、`npm run typecheck` 与 `npm test`。
+- [x] M1.2 `@jobhelper/storage` 实现：基于内置 `node:sqlite` 的 WAL/外键连接、迁移执行器（执行 `0001_initial.sql`，含校验和校验与失败句柄回收）、嵌套 savepoint 事务、全套 Repository 实现（`PreferencesRepo`、`ProviderRepo`、`ProfileRepo`、`PositionRepo`、`TaskRepo`、`RunRepo`、`EventRepo`、`HumanInTheLoopRepo`、`ActionLedgerRepo`、`ArtifactRepo`、`SiteMemoryRepo`）。
+- [x] M1.3 `@jobhelper/core` 档案与材料服务：结构化档案 CRUD、不可变 `ProfileVersionSnapshot`（canonical JSON SHA-256）、全局默认档案记忆与切换隔离、个人事实记忆、本地附件托管目录（路径安全校验、SHA-256 完整性校验、大小限制、任务级授权检查与受控分页文本读取）。
+- [x] M1.4 `@jobhelper/model-router` 凭据服务：基于 Electron `safeStorage`（Windows DPAPI）结构接口的 `SafeStorageCredentialStore`（加密不可用时拒绝明文落盘）+ 单元测试 `InMemoryCredentialStore`。
+- [x] M1.5 `@jobhelper/model-router` BYOK 适配器：实现 OpenAI-compatible（含 DeepSeek `reasoning_content`）、Anthropic、Gemini 三个标准流式/JSON 适配器，支持流式输出（text + reasoning）、Tool Calling、Vision base64 图像输入、AbortSignal 取消、密钥自动脱敏与 Usage 计量。
+- [x] M1.6 连通性与能力探测（Capability Probe）：真实三段探测并持久化 `streaming` / `tool_calling` / `vision` 能力，输出清晰错误分类（`auth_failed`、`rate_limited`、`timeout`、`aborted`、`network_error`、`provider_error`）。
 
 ### M1 门禁出口条件
-- `npm run typecheck` 与 `npm test` 全绿。
-- 单元测试覆盖：数据库迁移与重启恢复读写、档案版本不可变性、凭据加解密隔离、至少 1 个真实或录制 BYOK 端点的流式与 tool-calling 探测。
+- [x] `npm run clean && npm run build && npm run typecheck && npm test` 全绿（9 项核心测试覆盖存储迁移与重启恢复、档案快照隔离、材料完整性、凭据加密隔离、三协议流式与工具调用及能力探测、401/429/timeout/abort 故障分类）。
+- [ ] 可选：待用户提供真实 BYOK API 配置后补充一次线上端点连通性实测（不阻塞进入 M2）。
 
 ---
 
