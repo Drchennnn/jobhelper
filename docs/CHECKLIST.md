@@ -71,24 +71,24 @@
 **目标**：实现任务生命周期状态机、去重创建、`ControlLease`、`ScopedCdpBridge`、`WebContentsView` 管理与 `Submit Hard-Guard`。
 
 ### 交付清单
-- [ ] M2.1 `@jobhelper/core` 状态机与 `TaskService`：实现四轴合法转移校验器、同 URL/岗位并发去重（共享创建 Promise + 复用未完成任务）、关闭/重启恢复（`running`/`queued` → `interrupted`）。
-- [ ] M2.2 `@jobhelper/core` `ControlLease` & `TaskControls` & `Scheduler`：独立任务租约、可配置并发上限（1–5）、FIFO 排队、`stopTask` 先撤 lease/CDP 再异步停 worker 并维护 `stopping` 状态。
-- [ ] M2.3 `@jobhelper/core` `ConfirmationService`：核对卡生成、`contentHash` 绑定、单次消费、内容变更自动失效、超时与拒绝语义。
-- [ ] M2.4 `@jobhelper/browser-bridge` `TaskTabManager`：基于 Electron `WebContentsView` 管理任务级标签页、共享 `persist:jobhelper-<browserProfileId>` 分区、`setWindowOpenHandler` 新弹窗归入同任务、隐藏视图保持非零 viewport、渲染器崩溃隔离处理。
-- [ ] M2.5 `@jobhelper/browser-bridge` `ScopedCdpBridge`：本机随机端口 WebSocket 服务（`maxPayload: 80 MiB`）、ephemeral token 鉴权、每帧校验 `TaskControls.assert(taskId, epoch)`、未首次导航弹窗延迟暴露、隐藏视图 DPR 归一化截图。
-- [ ] M2.6 `@jobhelper/browser-bridge` `BrowserController` & `Submit Hard-Guard`：
-  - `observe`（AXTree 提取、密码框脱敏、短生命周期 `ref`、`generation` 失效）。
-  - `fill` / `select` / `upload` 执行后强制回读校验。
+- [x] M2.1 `@jobhelper/core` 状态机与 `TaskService`：实现四轴合法转移校验器（`state-machine.ts`）、URL 安全策略与归一化（`url-policy.ts`）、同 URL/岗位并发去重（共享 Promise + 复用未完成任务）、关闭与重启恢复（`running`/`queued`/`stopping` → `interrupted`）、`clientMessageId` 幂等、迟到问题补答。
+- [x] M2.2 `@jobhelper/core` `ControlLease` & `TaskControls` & `Scheduler`：独立任务租约、可配置并发上限（1–5）、FIFO 排队、`requestTakeover` 先撤 lease/CDP 再异步停 worker 并维护 `stopping → paused` 语义。
+- [x] M2.3 `@jobhelper/core` `ConfirmationService`：核对卡生成、`contentHash` 绑定、单次消费、内容/附件变更及人工接管恢复自动失效。
+- [x] M2.4 `@jobhelper/browser-bridge` `TaskTabManager`：基于 `WebContentsView` 结构接口管理任务级标签页、共享 `persist:jobhelper-<browserProfileId>` 分区、`window.open` 新弹窗归入同任务、隐藏视图保持非零 viewport、渲染器崩溃隔离自动停任务。
+- [x] M2.5 `@jobhelper/browser-bridge` `ScopedCdpBridge`：本机随机端口 WebSocket 服务（`maxPayload: 80 MiB`）、32-byte `base64url` 临时路由鉴权、升级及每帧前后校验 `TaskControls.assert(taskId, epoch)`、严格任务目标隔离、未首次导航弹窗延迟暴露。
+- [x] M2.6 `@jobhelper/browser-bridge` `BrowserController` & `Submit Hard-Guard`：
+  - `observe`（AXTree 提取、密码框脱敏 `[密码]`、短生命周期 `ref`、`generation` 失效）。
+  - `fill` / `select` 执行后强制回读校验。
   - 密码/验证码/OTP 字段硬拒绝。
-  - **Submit Hard-Guard**：拦截点击提交按钮、表单内 `Enter` 键、坐标命中提交元素、跨 iframe 点击与任意脚本提交。
-- [ ] M2.7 Electron 主进程骨架接通（`apps/desktop/main`）：主窗口创建、Preload `contextBridge`、主进程 ↔ Worker IPC 通道与超时清理、Worker 崩溃重启恢复。
+  - **Submit Hard-Guard**：统一拦截点击提交按钮、表单内 `Enter` 键、坐标命中提交元素、跨 iframe 点击与任意脚本执行。
+- [x] M2.7 桌面主进程核心骨架接通（`apps/desktop`）：`createDesktopMainKernel` 组合根、`DesktopIpcRouter`（含手动导航/拆窗前自动接管）、`createJobHelperPreloadApi`、`WorkerProcessSupervisor`（逐请求 `epoch` 校验 + 崩溃立即回收全部租约与 CDP）与 `SharedAgentWorkerHost`。
 
 ### M2 门禁出口条件
-- 自动化测试证明：
-  1. `stopTask` 后立即投递旧 `epoch` 命令 100% 失败；
-  2. 尝试通过 `click`、`Enter`、坐标点击及受限脚本触发测试页提交按钮均被 `Submit Hard-Guard` 拦截；
-  3. 任务 A 的 CDP 连接无法枚举或操作任务 B 或工作台窗口；
-  4. 模拟主进程重启后 `running` 任务自动转为 `interrupted` 且不重放动作。
+- [x] 自动化测试证明（6 个测试套件 / 15 项核心用例全绿）：
+  1. `stopTask` / `requestTakeover` 后立即投递旧 `epoch` 命令 100% 失败（覆盖 `TaskControls`、`ScopedCdpBridge` WebSocket 与 `ScopedBrowserController`）；
+  2. 尝试通过 `click`、`Enter`、坐标点击、跨 iframe、密码框填写与任意脚本触发提交均被 `Submit Hard-Guard` 拦截；
+  3. 任务 A 的 CDP 连接无法枚举或 attach 任务 B 目标，撤销任务 A 不影响任务 B；
+  4. 模拟主进程重启后 `running` 任务自动转为 `interrupted` 且不重放动作；模拟 Worker 崩溃立即撤销全部租约与 CDP 并标记任务 `error`。
 
 ---
 
