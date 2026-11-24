@@ -1,0 +1,24 @@
+{
+  "name": "@jobhelper/desktop",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "main": "./dist/main/index.js",
+  "dependencies": {
+    "@jobhelper/browser-bridge": "0.1.0",
+    "@jobhelper/contracts": "0.1.0",
+    "@jobhelper/core": "0.1.0",
+    "@jobhelper/mcp-adapter": "0.1.0",
+    "@jobhelper/model-router": "0.1.0",
+    "@jobhelper/runtime": "0.1.0",
+    "@jobhelper/skills": "0.1.0",
+    "@jobhelper/storage": "0.1.0",
+    "@jobhelper/tools": "0.1.0"
+  },
+  "scripts": {
+    "dev": "echo \"[@jobhelper/desktop] Electron main/worker host implemented in M2-M4\"",
+    "build": "tsc -b",
+    "typecheck": "tsc --noEmit",
+    "test": "echo \"[@jobhelper/desktop] main/worker integration tests implemented in M2/M5\""
+  }
+}

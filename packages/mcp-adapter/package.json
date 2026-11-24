@@ -1,0 +1,17 @@
+{
+  "name": "@jobhelper/mcp-adapter",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "dependencies": {
+    "@jobhelper/contracts": "0.1.0",
+    "@jobhelper/tools": "0.1.0"
+  },
+  "scripts": {
+    "build": "tsc -b",
+    "typecheck": "tsc --noEmit",
+    "test": "echo \"[@jobhelper/mcp-adapter] optional local MCP adapter tests implemented in M3\""
+  }
+}

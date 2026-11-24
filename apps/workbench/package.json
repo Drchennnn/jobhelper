@@ -1,0 +1,17 @@
+{
+  "name": "@jobhelper/workbench",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "dependencies": {
+    "@jobhelper/contracts": "0.1.0"
+  },
+  "scripts": {
+    "dev": "echo \"[@jobhelper/workbench] Desktop workbench UI implemented in M4\"",
+    "build": "tsc -b",
+    "typecheck": "tsc --noEmit",
+    "test": "echo \"[@jobhelper/workbench] UI projection & card tests implemented in M4\""
+  }
+}
