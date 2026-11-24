@@ -1,4 +1,4 @@
-import { startMockAtsServer } from './server.js';
+import { startMockAtsServer } from './server.ts';
 
 const port = Number(process.env.MOCK_ATS_PORT ?? 4100);
 const server = await startMockAtsServer({ port, requireLogin: true });
