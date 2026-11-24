@@ -3,15 +3,26 @@
   "version": "0.1.0",
   "private": true,
   "type": "module",
-  "main": "./dist/index.js",
-  "types": "./dist/index.d.ts",
+  "main": "./dist-types/index.js",
+  "types": "./dist-types/index.d.ts",
   "dependencies": {
-    "@jobhelper/contracts": "0.1.0"
+    "@jobhelper/contracts": "0.1.0",
+    "lucide-react": "^1.47.0",
+    "react": "^19.2.5",
+    "react-dom": "^19.2.5"
+  },
+  "devDependencies": {
+    "@tailwindcss/vite": "^4.2.2",
+    "@types/react": "^19.2.15",
+    "@types/react-dom": "^19.2.3",
+    "@vitejs/plugin-react": "^6.0.1",
+    "tailwindcss": "^4.2.2",
+    "vite": "^8.0.10"
   },
   "scripts": {
-    "dev": "echo \"[@jobhelper/workbench] Desktop workbench UI implemented in M4\"",
-    "build": "tsc -b",
+    "dev": "vite --port 5173 --strictPort",
+    "build": "vite build",
     "typecheck": "tsc --noEmit",
-    "test": "echo \"[@jobhelper/workbench] UI projection & card tests implemented in M4\""
+    "test": "vitest run apps/workbench/test"
   }
 }

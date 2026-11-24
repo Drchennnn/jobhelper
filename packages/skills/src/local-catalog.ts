@@ -7,6 +7,7 @@ import type {
   SkillCatalogService,
   SkillCategory,
   SkillManifestEntry,
+  SkillSource,
 } from './catalog.js';
 
 interface ParsedFrontmatter {
@@ -61,60 +62,141 @@ function matchesDomainPattern(hostname: string, pattern: string): boolean {
   const cleanPat = pattern.toLowerCase().trim();
   if (!cleanPat) return false;
   if (cleanPat.startsWith('*.')) {
-    const suffix = cleanPat.slice(1); // '.zhiye.com'
+    const suffix = cleanPat.slice(1);
     return cleanHost.endsWith(suffix) || cleanHost === cleanPat.slice(2);
   }
   return cleanHost === cleanPat || cleanHost.endsWith(`.${cleanPat}`);
 }
 
+function inferCategoryFromName(name: string): SkillCategory {
+  if (name.startsWith('ats-')) return 'ats';
+  if (name.startsWith('form-')) return 'controls';
+  return 'custom';
+}
+
 /**
  * Local filesystem Skills index & on-demand loader.
- * Scans `<rootDir>/ats/*\/SKILL.md`, `<rootDir>/controls/*\/SKILL.md`, `<rootDir>/custom/*\/SKILL.md`.
- * Only exposes lightweight metadata via `listMetadata`; loads bodies one-by-one on demand.
+ * - Built-in root: scans `ats/*\/SKILL.md`, `controls/*\/SKILL.md`, `custom/*\/SKILL.md`.
+ * - External mounted roots (Option A): scans both structured category subdirs AND flat `<dir>/*\/SKILL.md`.
+ * - Built-in JobHelper skills take precedence if an external directory shares the same name.
  */
 export class LocalSkillCatalog implements SkillCatalogService {
   private entries = new Map<string, SkillManifestEntry>();
   private catalogVersion = 'empty';
+  private externalDirs: string[];
 
-  constructor(private readonly rootDir: string) {
+  constructor(
+    private readonly builtinRootDir: string,
+    initialExternalDirs: readonly string[] = [],
+  ) {
+    this.externalDirs = this.normalizeDirs(initialExternalDirs);
     this.refresh();
+  }
+
+  private normalizeDirs(dirs: readonly string[]): string[] {
+    const seen = new Set<string>();
+    const out: string[] = [];
+    for (const d of dirs) {
+      const trimmed = d.trim();
+      if (!trimmed) continue;
+      const resolved = path.resolve(trimmed);
+      if (!seen.has(resolved)) {
+        seen.add(resolved);
+        out.push(resolved);
+      }
+    }
+    return out;
+  }
+
+  getExternalDirs(): string[] {
+    return [...this.externalDirs];
+  }
+
+  setExternalDirs(dirs: readonly string[]): void {
+    this.externalDirs = this.normalizeDirs(dirs);
+    this.refresh();
+  }
+
+  private scanSkillFile(
+    skillFile: string,
+    rootDir: string,
+    category: SkillCategory,
+    source: SkillSource,
+    folderName: string,
+    target: Map<string, SkillManifestEntry>,
+  ): void {
+    const raw = fs.readFileSync(skillFile, 'utf8');
+    const parsed = parseSkillFrontmatter(raw);
+    const name = parsed.name || folderName;
+
+    // Built-in JobHelper skills win over external skills of the same name
+    if (source === 'external' && target.has(name)) {
+      return;
+    }
+
+    const sha256 = crypto.createHash('sha256').update(raw, 'utf8').digest('hex') as ContentHash;
+    target.set(name, {
+      name,
+      category,
+      source,
+      description: parsed.description || `${name} 操作手册`,
+      domainPatterns: parsed.domains,
+      domMarkers: parsed.domMarkers,
+      relativePath: path.relative(rootDir, skillFile).split(path.sep).join('/'),
+      absolutePath: path.resolve(skillFile),
+      sha256,
+      byteLength: Buffer.byteLength(raw, 'utf8'),
+    });
+  }
+
+  private scanRoot(rootDir: string, source: SkillSource, target: Map<string, SkillManifestEntry>): void {
+    if (!fs.existsSync(rootDir) || !fs.statSync(rootDir).isDirectory()) return;
+
+    const categories: SkillCategory[] = ['ats', 'controls', 'custom'];
+    const categoryDirs = new Set<string>(categories);
+
+    for (const category of categories) {
+      const catDir = path.join(rootDir, category);
+      if (!fs.existsSync(catDir) || !fs.statSync(catDir).isDirectory()) continue;
+      for (const dirent of fs.readdirSync(catDir, { withFileTypes: true })) {
+        if (!dirent.isDirectory()) continue;
+        const skillFile = path.join(catDir, dirent.name, 'SKILL.md');
+        if (fs.existsSync(skillFile)) {
+          this.scanSkillFile(skillFile, rootDir, category, source, dirent.name, target);
+        }
+      }
+    }
+
+    // For external mounted directories, also support flat `<root>/<skillName>/SKILL.md` layouts
+    if (source === 'external') {
+      for (const dirent of fs.readdirSync(rootDir, { withFileTypes: true })) {
+        if (!dirent.isDirectory() || categoryDirs.has(dirent.name)) continue;
+        const skillFile = path.join(rootDir, dirent.name, 'SKILL.md');
+        if (fs.existsSync(skillFile)) {
+          this.scanSkillFile(
+            skillFile,
+            rootDir,
+            inferCategoryFromName(dirent.name),
+            source,
+            dirent.name,
+            target,
+          );
+        }
+      }
+    }
   }
 
   refresh(): void {
     const next = new Map<string, SkillManifestEntry>();
-    const categories: SkillCategory[] = ['ats', 'controls', 'custom'];
-
-    for (const category of categories) {
-      const catDir = path.join(this.rootDir, category);
-      if (!fs.existsSync(catDir) || !fs.statSync(catDir).isDirectory()) continue;
-
-      for (const dirent of fs.readdirSync(catDir, { withFileTypes: true })) {
-        if (!dirent.isDirectory()) continue;
-        const skillFile = path.join(catDir, dirent.name, 'SKILL.md');
-        if (!fs.existsSync(skillFile)) continue;
-
-        const raw = fs.readFileSync(skillFile, 'utf8');
-        const parsed = parseSkillFrontmatter(raw);
-        const name = parsed.name || dirent.name;
-        const sha256 = crypto.createHash('sha256').update(raw, 'utf8').digest('hex') as ContentHash;
-
-        next.set(name, {
-          name,
-          category,
-          description: parsed.description || `${name} 操作手册`,
-          domainPatterns: parsed.domains,
-          domMarkers: parsed.domMarkers,
-          relativePath: path.posix.join(category, dirent.name, 'SKILL.md'),
-          sha256,
-          byteLength: Buffer.byteLength(raw, 'utf8'),
-        });
-      }
+    this.scanRoot(this.builtinRootDir, 'builtin', next);
+    for (const extDir of this.externalDirs) {
+      this.scanRoot(extDir, 'external', next);
     }
 
     this.entries = next;
     const versionHash = crypto.createHash('sha256');
     for (const entry of [...next.values()].sort((a, b) => a.name.localeCompare(b.name))) {
-      versionHash.update(`${entry.name}:${entry.sha256}\n`);
+      versionHash.update(`${entry.source}:${entry.name}:${entry.sha256}\n`);
     }
     this.catalogVersion = versionHash.digest('hex').slice(0, 16);
   }
@@ -123,10 +205,17 @@ export class LocalSkillCatalog implements SkillCatalogService {
     return this.catalogVersion;
   }
 
-  listMetadata(filter?: { category?: SkillCategory; domain?: string }): SkillManifestEntry[] {
+  listMetadata(filter?: {
+    category?: SkillCategory;
+    domain?: string;
+    source?: SkillSource;
+  }): SkillManifestEntry[] {
     let list = [...this.entries.values()];
     if (filter?.category) {
       list = list.filter((e) => e.category === filter.category);
+    }
+    if (filter?.source) {
+      list = list.filter((e) => e.source === filter.source);
     }
     if (filter?.domain) {
       const host = filter.domain.toLowerCase();
@@ -168,9 +257,8 @@ export class LocalSkillCatalog implements SkillCatalogService {
 
   async loadSkill(skillName: string): Promise<LoadedSkillDocument | null> {
     const manifest = this.entries.get(skillName);
-    if (!manifest) return null;
-    const fullPath = path.resolve(this.rootDir, manifest.relativePath);
-    const raw = fs.readFileSync(fullPath, 'utf8');
+    if (!manifest || !fs.existsSync(manifest.absolutePath)) return null;
+    const raw = fs.readFileSync(manifest.absolutePath, 'utf8');
     const parsed = parseSkillFrontmatter(raw);
     return {
       manifest,
