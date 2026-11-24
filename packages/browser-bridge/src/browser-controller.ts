@@ -64,6 +64,11 @@ export interface ScopedBrowserControllerOptions {
   assertActive: (taskId: TaskId, epoch: Epoch) => void;
   submitGuard: DefaultSubmitHardGuard;
   workbenchOrigin?: string;
+  /** Resolves an authorized materialId to its verified local disk path for DOM.setFileInputFiles. */
+  resolveAuthorizedFilePath?: (
+    taskId: TaskId,
+    materialId: NonNullable<BrowserActCommand['materialId']>,
+  ) => { filePath: string; fileName: string };
 }
 
 /**
@@ -369,6 +374,36 @@ export class ScopedBrowserController implements ScopedBrowserExecutor {
           throw new Error(`下拉回读不一致: 期望 "${value}"，实际 "${String(readback)}"`);
         }
         return { ok: true, changed: true, readbackValue: readback, nextHint: '下拉选择并回读一致' };
+      }
+
+      if (command.action === 'upload') {
+        if (!command.materialId || !this.options.resolveAuthorizedFilePath) {
+          throw new Error('附件上传缺少已授权的 materialId 或文件路径解析器');
+        }
+        const { filePath, fileName } = this.options.resolveAuthorizedFilePath(
+          command.taskId,
+          command.materialId,
+        );
+        await this.sendCdp(tab, command.taskId, command.epoch, 'DOM.setFileInputFiles', {
+          backendNodeId: refEntry.backendDOMNodeId,
+          files: [filePath],
+        });
+        const uploadedName = (await this.callOnObject(
+          tab,
+          command.taskId,
+          command.epoch,
+          objectId,
+          'function() { return this.files && this.files[0] ? this.files[0].name : ""; }',
+        )) as string;
+        if (uploadedName && uploadedName !== fileName) {
+          throw new Error(`上传文件回读不一致: 期望 "${fileName}"，实际 "${uploadedName}"`);
+        }
+        return {
+          ok: true,
+          changed: true,
+          readbackValue: uploadedName || fileName,
+          nextHint: '附件已选择，请重新 observe 确认页面状态',
+        };
       }
 
       if (command.action === 'click' || command.action === 'check') {

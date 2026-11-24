@@ -70,6 +70,7 @@ export interface AssembledAgentEngine {
 export function assembleDesktopAgentEngine(deps: RuntimeAssemblyDeps): AssembledAgentEngine {
   const questionWaiter = new InProcessQuestionWaitCoordinator();
   const registry = new DefaultToolRegistry();
+  const consumedUserSeqByTask = new Map<TaskId, number>();
 
   const captureAndStoreScreenshot = async (
     taskId: TaskId,
@@ -477,6 +478,27 @@ export function assembleDesktopAgentEngine(deps: RuntimeAssemblyDeps): Assembled
   const runtime = new LocalAgentRuntime({
     modelRouter: deps.modelRouter,
     tools: registry,
+    getPendingUserPrompts: (taskId) => {
+      const afterSeq = consumedUserSeqByTask.get(taskId) ?? 0;
+      const events = deps.storage.events.listByTask(taskId, afterSeq);
+      const prompts: string[] = [];
+      let maxSeq = afterSeq;
+      for (const ev of events) {
+        if (ev.seq > maxSeq) maxSeq = ev.seq;
+        if (ev.type === 'user_message' && typeof ev.payload.text === 'string' && ev.payload.text.trim()) {
+          prompts.push(ev.payload.text.trim());
+        } else if (ev.type === 'question_answered') {
+          const answers = ev.payload.answers as Array<{ questionId: string; value: string }> | undefined;
+          if (answers && answers.length > 0) {
+            prompts.push(
+              `用户已补答先前问题卡（callId=${String(ev.payload.callId ?? '')}）：${JSON.stringify(answers)}`,
+            );
+          }
+        }
+      }
+      consumedUserSeqByTask.set(taskId, maxSeq);
+      return prompts;
+    },
     sink: {
       onStreamDelta: (delta) => deps.sink?.onStreamDelta?.(delta),
       onAssistantMessage: (ev) => {

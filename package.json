@@ -19,7 +19,8 @@
     "typecheck": "tsc -b --emitDeclarationOnly",
     "test": "vitest run",
     "test:watch": "vitest",
-    "test:gate1": "echo \"[M5 Gate 1] Acceptance test harness not implemented yet. See docs/ACCEPTANCE_GATE1.md\"",
+    "test:gate1": "vitest run fixtures/mock-ats/test/gate1-acceptance.test.ts",
+    "mock-ats": "node --experimental-strip-types fixtures/mock-ats/cli.ts",
     "clean": "tsc -b --clean"
   },
   "devDependencies": {

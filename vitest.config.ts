@@ -25,6 +25,7 @@ export default defineConfig({
       'packages/*/test/**/*.test.ts',
       'apps/*/test/**/*.test.ts',
       'apps/*/test/**/*.test.tsx',
+      'fixtures/*/test/**/*.test.ts',
     ],
     testTimeout: 15_000,
     hookTimeout: 15_000,

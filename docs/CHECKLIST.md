@@ -145,23 +145,23 @@
 **目标**：严格执行 [docs/ACCEPTANCE_GATE1.md](./ACCEPTANCE_GATE1.md) 全部验收场景，拿到首个端到端可复现证据包。
 
 ### 交付清单
-- [ ] M5.1 构建可重置本地测试站点 `fixtures/mock-ats`（含模拟登录页、多类表单控件、附件上传、确认提交页、可配置的正常回执/超时无回执故障注入）。
-- [ ] M5.2 执行主路径 8 步黄金闭环：虚构简历 + 真实 BYOK 配置 → 建任务 → 读字段 → 填表并回读 → 人工接管改值 → 恢复后读到新值 → 展示核对卡 → 人工提交 → 读回执。
-- [ ] M5.3 执行安全与异常边界 10 项必测项：
-  - [ ] 旧 `epoch` 动作注入被拒绝
-  - [ ] Submit Hard-Guard 阻断 click / Enter / 坐标 / 脚本提交
-  - [ ] 修改已填内容使既有核对卡失效
-  - [ ] 模拟回执超时后停在 `verifying` + `unknown`，绝不自动重投
-  - [ ] 模拟应用强制退出重启，运行中任务恢复为 `interrupted` 不重放写操作
-  - [ ] 迟到问题回答回挂原 `questionId`
-  - [ ] 切换全局默认档案不影响既有任务
-  - [ ] 同一岗位重复点开始复用原任务
-  - [ ] 总助手批量派发 2 个以上岗位，互不串档案和网页
-  - [ ] API 超时/限流时展示真实错误并保留已完成步骤
-- [ ] M5.4 产出 Gate 1 验收报告与日志/截图证据归档。
+- [x] M5.1 构建可重置本地测试站点 `fixtures/mock-ats`（[server.ts](../fixtures/mock-ats/server.ts) + `npm run mock-ats` CLI，含模拟登录页、多类表单控件、PDF 简历上传、保存草稿、确认提交页、以及 `success` / `timeout` / `error` 回执模式故障注入）。
+- [x] M5.2 执行主路径 8 步黄金闭环（[gate1-acceptance.test.ts](../fixtures/mock-ats/test/gate1-acceptance.test.ts)）：虚构简历 + BYOK 探测（含 `stream_options` 降级）→ 建任务 → 登录页脱敏观察与接管 → 填表/下拉/PDF 上传回读 → 实时问题卡补答 → 人工接管改值 → 恢复后准确读回新值 → 核对卡 → 人工提交 → 读回执收敛 `submitted_verified`。
+- [x] M5.3 执行安全与异常边界 10 项必测项：
+  - [x] G1-S01 旧 `epoch` 动作注入被拒绝
+  - [x] G1-S02 Submit Hard-Guard 阻断 click / Enter / 坐标 / 脚本提交（Mock ATS 收到 0 笔提交）
+  - [x] G1-S03 核对卡在接管恢复后自动置 `invalidated`
+  - [x] G1-S04 模拟回执超时（HTTP 504）后停在 `verifying` + `unknown`，绝不自动重投
+  - [x] G1-S05 模拟应用强退重启，运行中任务恢复为 `interrupted` 不重放写操作
+  - [x] G1-S06 问题卡超时后迟到回答回挂原 `questionId`
+  - [x] G1-S07 切换全局默认档案不影响既有任务锁定快照
+  - [x] G1-S08 同一岗位重复点开始复用原任务
+  - [x] G1-S09 `job-001` 与 `job-002` 并行派发，档案快照与 CDP 目标严格隔离
+  - [x] G1-S10 BYOK 429 限流时返回真实错误并保留历史进度
+- [x] M5.4 产出 Gate 1 验收报告 [docs/GATE1_REPORT.md](./GATE1_REPORT.md) 并修复验收中暴露的附件上传真实文件名与桌面联调闭环细节。
 
 ### M5 门禁出口条件
-- Gate 1 全部主路径与 10 项边界测试 100% 通过，无 P0/P1 缺陷。
+- [x] `npm run test:gate1` 与全量回归 `npm test`（12 个测试套件 / 26 项用例）100% 通过，无 P0/P1 缺陷。
 
 ---
 

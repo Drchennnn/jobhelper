@@ -104,7 +104,7 @@ describe('@jobhelper/core Profile & Material Services', () => {
         data: Buffer.from('0123456789ABCDEF', 'utf8'),
       });
       expect(textDoc.fileName).toBe('evil-resume-notes.txt');
-      expect(textDoc.relativePath).toMatch(/^materials\/[a-f0-9-]+\.txt$/);
+      expect(textDoc.relativePath).toMatch(/^materials\/[a-f0-9-]+\/evil-resume-notes\.txt$/);
 
       // Setting default resume attachment does NOT bump profile version
       const pdfDoc = materialService.importFromBuffer({

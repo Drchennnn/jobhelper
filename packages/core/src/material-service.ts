@@ -30,9 +30,10 @@ export interface MaterialTextSlice {
 
 const DEFAULT_MAX_FILE_SIZE = 25 * 1024 * 1024;
 
-function sanitizeExtension(fileName: string): string {
-  const ext = path.extname(path.basename(fileName)).toLowerCase();
-  return /^\.[a-z0-9]{1,10}$/.test(ext) ? ext : '';
+function sanitizeFileName(fileName: string): string {
+  const base = path.basename(fileName).trim();
+  const cleaned = base.replace(/[<>:"/\\|?*\x00-\x1f]/g, '_').replace(/^\.+/, '');
+  return cleaned || 'attachment';
 }
 
 function assertContainedPath(rootDir: string, relativePath: string): string {
@@ -81,8 +82,8 @@ export class LocalMaterialService {
     }
 
     const id = crypto.randomUUID() as MaterialId;
-    const ext = sanitizeExtension(cleanName);
-    const relativePath = path.posix.join('materials', `${id}${ext}`);
+    const safeDiskName = sanitizeFileName(cleanName);
+    const relativePath = path.posix.join('materials', id, safeDiskName);
     const fullPath = assertContainedPath(this.rootDir, relativePath);
     const sha256 = sha256Buffer(input.data);
     const now = new Date().toISOString() as IsoTimestamp;
@@ -167,6 +168,18 @@ export class LocalMaterialService {
       throw new Error(`附件完整性校验失败 (${materialId}): expected ${record.sha256}, got ${actualHash}`);
     }
     return { record, buffer };
+  }
+
+  /**
+   * Resolves a verified local file path for controlled browser upload (DOM.setFileInputFiles).
+   */
+  resolveAuthorizedFilePath(
+    materialId: MaterialId,
+    authorizedMaterialIds: readonly MaterialId[],
+  ): { record: MaterialRecord; filePath: string } {
+    const { record } = this.readAuthorizedBuffer(materialId, authorizedMaterialIds);
+    const filePath = assertContainedPath(this.rootDir, record.relativePath);
+    return { record, filePath };
   }
 
   /**
