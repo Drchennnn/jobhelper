@@ -6,7 +6,8 @@
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
   "dependencies": {
-    "@jobhelper/contracts": "0.1.0"
+    "@jobhelper/contracts": "0.1.0",
+    "ws": "^8.23.0"
   },
   "scripts": {
     "build": "tsc -b",
