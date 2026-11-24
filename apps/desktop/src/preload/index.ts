@@ -1,59 +1,73 @@
-import type { RendererToMainIpc } from '@jobhelper/contracts';
+import type { MainToRendererEvent, RendererToMainIpc } from '@jobhelper/contracts';
 
-export type JobHelperPreloadApi = RendererToMainIpc;
+export interface JobHelperPreloadApi extends RendererToMainIpc {
+  onMainEvent?: (listener: (event: MainToRendererEvent) => void) => () => void;
+}
 
 export interface ElectronIpcRendererLike {
   invoke(channel: string, arg?: unknown): Promise<unknown>;
+  on?(channel: string, listener: (_event: unknown, payload: MainToRendererEvent) => void): void;
+  removeListener?(
+    channel: string,
+    listener: (_event: unknown, payload: MainToRendererEvent) => void,
+  ): void;
 }
+
+export const MAIN_EVENT_CHANNEL = 'jobhelper:event';
 
 /**
  * Builds the strictly typed `window.jobHelper` bridge exposed via Electron contextBridge.
  * Exposes zero Node APIs and zero plaintext model credentials.
  */
 export function createJobHelperPreloadApi(ipcRenderer: ElectronIpcRendererLike): JobHelperPreloadApi {
+  const invoke = <K extends keyof RendererToMainIpc>(channel: K) => {
+    return ((arg?: unknown) =>
+      ipcRenderer.invoke(channel, arg)) as RendererToMainIpc[K];
+  };
+
   return {
-    'tasks:list': () => ipcRenderer.invoke('tasks:list') as ReturnType<RendererToMainIpc['tasks:list']>,
-    'tasks:startApplication': (input) =>
-      ipcRenderer.invoke('tasks:startApplication', input) as ReturnType<
-        RendererToMainIpc['tasks:startApplication']
-      >,
-    'tasks:sendMessage': (input) =>
-      ipcRenderer.invoke('tasks:sendMessage', input) as ReturnType<
-        RendererToMainIpc['tasks:sendMessage']
-      >,
-    'tasks:takeover': (input) =>
-      ipcRenderer.invoke('tasks:takeover', input) as ReturnType<RendererToMainIpc['tasks:takeover']>,
-    'tasks:resumeCheck': (input) =>
-      ipcRenderer.invoke('tasks:resumeCheck', input) as ReturnType<
-        RendererToMainIpc['tasks:resumeCheck']
-      >,
-    'tasks:close': (input) =>
-      ipcRenderer.invoke('tasks:close', input) as ReturnType<RendererToMainIpc['tasks:close']>,
-    'tasks:answerQuestion': (input) =>
-      ipcRenderer.invoke('tasks:answerQuestion', input) as ReturnType<
-        RendererToMainIpc['tasks:answerQuestion']
-      >,
-    'tasks:resolveConfirmation': (input) =>
-      ipcRenderer.invoke('tasks:resolveConfirmation', input) as ReturnType<
-        RendererToMainIpc['tasks:resolveConfirmation']
-      >,
-    'tasks:events': (input) =>
-      ipcRenderer.invoke('tasks:events', input) as ReturnType<RendererToMainIpc['tasks:events']>,
-    'browser:syncSurface': (input) =>
-      ipcRenderer.invoke('browser:syncSurface', input) as ReturnType<
-        RendererToMainIpc['browser:syncSurface']
-      >,
-    'browser:navigate': (input) =>
-      ipcRenderer.invoke('browser:navigate', input) as ReturnType<
-        RendererToMainIpc['browser:navigate']
-      >,
-    'browser:detachWindow': (input) =>
-      ipcRenderer.invoke('browser:detachWindow', input) as ReturnType<
-        RendererToMainIpc['browser:detachWindow']
-      >,
-    'providers:probe': (input) =>
-      ipcRenderer.invoke('providers:probe', input) as ReturnType<
-        RendererToMainIpc['providers:probe']
-      >,
+    'tasks:list': invoke('tasks:list'),
+    'tasks:getCoordinator': invoke('tasks:getCoordinator'),
+    'tasks:getProjection': invoke('tasks:getProjection'),
+    'tasks:startApplication': invoke('tasks:startApplication'),
+    'tasks:sendMessage': invoke('tasks:sendMessage'),
+    'tasks:takeover': invoke('tasks:takeover'),
+    'tasks:resumeCheck': invoke('tasks:resumeCheck'),
+    'tasks:close': invoke('tasks:close'),
+    'tasks:answerQuestion': invoke('tasks:answerQuestion'),
+    'tasks:resolveConfirmation': invoke('tasks:resolveConfirmation'),
+    'tasks:events': invoke('tasks:events'),
+    'browser:syncSurface': invoke('browser:syncSurface'),
+    'browser:navigate': invoke('browser:navigate'),
+    'browser:detachWindow': invoke('browser:detachWindow'),
+    'profiles:list': invoke('profiles:list'),
+    'profiles:get': invoke('profiles:get'),
+    'profiles:create': invoke('profiles:create'),
+    'profiles:updateContent': invoke('profiles:updateContent'),
+    'profiles:setDefault': invoke('profiles:setDefault'),
+    'profiles:setDefaultResume': invoke('profiles:setDefaultResume'),
+    'materials:list': invoke('materials:list'),
+    'materials:importBuffer': invoke('materials:importBuffer'),
+    'facts:list': invoke('facts:list'),
+    'facts:remember': invoke('facts:remember'),
+    'positions:list': invoke('positions:list'),
+    'positions:add': invoke('positions:add'),
+    'positions:updateProgress': invoke('positions:updateProgress'),
+    'providers:list': invoke('providers:list'),
+    'providers:save': invoke('providers:save'),
+    'providers:delete': invoke('providers:delete'),
+    'providers:probe': invoke('providers:probe'),
+    'settings:get': invoke('settings:get'),
+    'settings:update': invoke('settings:update'),
+    'skills:list': invoke('skills:list'),
+    'skills:load': invoke('skills:load'),
+    'skills:listDrafts': invoke('skills:listDrafts'),
+    'skills:reviewDraft': invoke('skills:reviewDraft'),
+    onMainEvent: (listener) => {
+      if (!ipcRenderer.on || !ipcRenderer.removeListener) return () => {};
+      const wrapped = (_evt: unknown, payload: MainToRendererEvent) => listener(payload);
+      ipcRenderer.on(MAIN_EVENT_CHANNEL, wrapped);
+      return () => ipcRenderer.removeListener?.(MAIN_EVENT_CHANNEL, wrapped);
+    },
   };
 }

@@ -1,5 +1,15 @@
 import crypto from 'node:crypto';
-import type { Epoch, EventId, IsoTimestamp, RunId, TaskId } from '@jobhelper/contracts';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
+import type {
+  Epoch,
+  EventId,
+  IsoTimestamp,
+  MainToRendererEvent,
+  RunId,
+  SessionId,
+  TaskId,
+} from '@jobhelper/contracts';
 import {
   DefaultSubmitHardGuard,
   LocalScopedCdpBridge,
@@ -15,20 +25,37 @@ import {
   LocalTaskService,
   TaskControls,
 } from '@jobhelper/core';
+import { LocalTaskMcpServer } from '@jobhelper/mcp-adapter';
 import { ByokModelRouter, type CredentialStore } from '@jobhelper/model-router';
+import { LocalSkillCatalog } from '@jobhelper/skills';
 import { createSqliteStorage, type SqliteStorage } from '@jobhelper/storage';
 import { DesktopIpcRouter } from './ipc-router.js';
+import { assembleDesktopAgentEngine, type AssembledAgentEngine } from './runtime-assembly.js';
 import { WorkerProcessSupervisor, type WorkerChildTransport } from './worker-supervisor.js';
+
+const DEFAULT_BUILTIN_SKILLS_DIR = path.resolve(
+  path.dirname(fileURLToPath(import.meta.url)),
+  '..',
+  '..',
+  '..',
+  '..',
+  'skills-library',
+);
 
 export interface DesktopKernelOptions {
   dbPath: string;
   materialsRootDir: string;
+  artifactsRootDir?: string;
+  builtinSkillsDir?: string;
   credentials: CredentialStore;
   viewFactory: WebContentsViewFactory;
   spawnWorker: () => WorkerChildTransport;
   workbenchOrigin?: string;
   maxConcurrent?: number;
   stopAckTimeoutMs?: number;
+  enableLocalMcpServer?: boolean;
+  onEmitRendererEvent?: (event: MainToRendererEvent) => void;
+  onDetachWindow?: (taskId: TaskId) => Promise<void> | void;
 }
 
 export interface DesktopMainKernel {
@@ -42,6 +69,9 @@ export interface DesktopMainKernel {
   readonly cdpBridge: LocalScopedCdpBridge;
   readonly browserController: ScopedBrowserController;
   readonly modelRouter: ByokModelRouter;
+  readonly skills: LocalSkillCatalog;
+  readonly mcpServer: LocalTaskMcpServer;
+  readonly agentEngine: AssembledAgentEngine;
   readonly scheduler: LocalTaskScheduler;
   readonly taskService: LocalTaskService;
   readonly worker: WorkerProcessSupervisor;
@@ -52,7 +82,8 @@ export interface DesktopMainKernel {
 
 /**
  * Main Process composition root uniting Storage, Core Services, Leases, Scoped CDP,
- * Submit Hard-Guard, BYOK ModelRouter, Worker Supervisor, and Typed IPC Router.
+ * Submit Hard-Guard, BYOK ModelRouter, Skills Catalog (Option A), Unified ToolRegistry,
+ * AgentRuntime, Optional Task MCP Server, Worker Supervisor, and Typed IPC Router.
  */
 export function createDesktopMainKernel(options: DesktopKernelOptions): DesktopMainKernel {
   const storage = createSqliteStorage({ filename: options.dbPath });
@@ -64,6 +95,13 @@ export function createDesktopMainKernel(options: DesktopKernelOptions): DesktopM
   const confirmations = new LocalConfirmationService(storage.uow, storage.hitl, storage.events);
   const submitGuard = new DefaultSubmitHardGuard({ mode: 'manual_only' });
   const modelRouter = new ByokModelRouter(storage.providers, options.credentials);
+
+  const savedExternalDirs = storage.preferences.get<string[]>('externalSkillDirs') ?? [];
+  const skills = new LocalSkillCatalog(
+    options.builtinSkillsDir ?? DEFAULT_BUILTIN_SKILLS_DIR,
+    savedExternalDirs,
+  );
+  const savedMaxConcurrent = storage.preferences.get<number>('maxConcurrent');
 
   let cdpBridge!: LocalScopedCdpBridge;
   let taskService!: LocalTaskService;
@@ -111,7 +149,10 @@ export function createDesktopMainKernel(options: DesktopKernelOptions): DesktopM
     spawnWorker: options.spawnWorker,
     onRevokeCdp: (taskId) => cdpBridge.revokeTask(taskId),
     stopAckTimeoutMs: options.stopAckTimeoutMs,
-    onRpcRequest: async (taskId, epoch, method, params) => {
+    onStreamDelta: (delta) => {
+      options.onEmitRendererEvent?.({ type: 'stream_delta', taskId: delta.taskId, delta });
+    },
+    onRpcRequest: async (taskId, epoch, method) => {
       if (method === 'cdp_connect') {
         return { wsEndpoint: await cdpBridge.issueEndpoint(taskId, epoch) };
       }
@@ -119,6 +160,7 @@ export function createDesktopMainKernel(options: DesktopKernelOptions): DesktopM
     },
     onRunStoppedAck: (taskId) => {
       taskService.markTakeoverSettled(taskId);
+      options.onEmitRendererEvent?.({ type: 'tasks_changed', taskId });
     },
     onWorkerCrashed: (affectedTasks, reason) => {
       const now = new Date().toISOString() as IsoTimestamp;
@@ -132,7 +174,8 @@ export function createDesktopMainKernel(options: DesktopKernelOptions): DesktopM
           payload: {
             kind: 'worker_crash',
             reason,
-            message: 'Agent Worker 异常退出，已立即收回浏览器控制权。请核对网页后手动继续，系统不会自动重放操作。',
+            message:
+              'Agent Worker 异常退出，已立即收回浏览器控制权。请核对网页后手动继续，系统不会自动重放操作。',
           },
           createdAt: now,
         });
@@ -142,6 +185,7 @@ export function createDesktopMainKernel(options: DesktopKernelOptions): DesktopM
           reason: 'worker_crash',
           actor: 'system',
         });
+        options.onEmitRendererEvent?.({ type: 'tasks_changed', taskId });
       }
     },
   });
@@ -158,13 +202,14 @@ export function createDesktopMainKernel(options: DesktopKernelOptions): DesktopM
           reason: `run_dispatched:${runId}`,
           actor: 'system',
         });
+        options.onEmitRendererEvent?.({ type: 'tasks_changed', taskId });
         worker.startRun(taskId, runId, epoch);
       },
       onCancel: (taskId) => {
         cdpBridge.revokeTask(taskId);
       },
     },
-    options.maxConcurrent ?? 3,
+    options.maxConcurrent ?? savedMaxConcurrent ?? 3,
   );
 
   taskService = new LocalTaskService({
@@ -187,13 +232,45 @@ export function createDesktopMainKernel(options: DesktopKernelOptions): DesktopM
       worker.trySpliceMessage(taskId, input.clientMessageId, input.text),
   });
 
-  const ipcRouter = new DesktopIpcRouter({
-    tasksRepo: storage.tasks,
-    eventsRepo: storage.events,
+  const agentEngine = assembleDesktopAgentEngine({
+    storage,
     taskService,
+    profiles,
+    materials,
+    confirmations,
+    tabs,
+    browserController,
+    submitGuard,
+    modelRouter,
+    skills,
+    artifactsRootDir: options.artifactsRootDir ?? options.materialsRootDir,
+    sink: {
+      onStreamDelta: (delta) =>
+        options.onEmitRendererEvent?.({ type: 'stream_delta', taskId: delta.taskId, delta }),
+      onAssistantMessage: (ev) =>
+        options.onEmitRendererEvent?.({ type: 'tasks_changed', taskId: ev.taskId }),
+      onToolResult: (ev) =>
+        options.onEmitRendererEvent?.({ type: 'tasks_changed', taskId: ev.taskId }),
+    },
+  });
+
+  const mcpServer = new LocalTaskMcpServer(agentEngine.registry);
+
+  const ipcRouter = new DesktopIpcRouter({
+    storage,
+    taskService,
+    scheduler,
+    profiles,
+    materials,
     confirmations,
     tabs,
     modelRouter,
+    credentials: options.credentials,
+    skills,
+    workbenchOrigin: options.workbenchOrigin,
+    onDetachWindow: options.onDetachWindow,
+    onNotifyTasksChanged: (taskId) =>
+      options.onEmitRendererEvent?.({ type: 'tasks_changed', taskId }),
   });
 
   return {
@@ -207,6 +284,9 @@ export function createDesktopMainKernel(options: DesktopKernelOptions): DesktopM
     cdpBridge,
     browserController,
     modelRouter,
+    skills,
+    mcpServer,
+    agentEngine,
     scheduler,
     taskService,
     worker,
@@ -214,16 +294,77 @@ export function createDesktopMainKernel(options: DesktopKernelOptions): DesktopM
     start() {
       const recoveredTaskIds = taskService.recoverOnStartup();
       worker.start();
+      if (options.enableLocalMcpServer) {
+        void mcpServer.start().catch(() => {});
+      }
       return { recoveredTaskIds };
     },
     async shutdown() {
       worker.shutdown();
       leases.stop();
+      await mcpServer.close();
       await cdpBridge.close();
       storage.close();
     },
   };
 }
 
+/**
+ * Helper to execute a single task turn directly via the assembled LocalAgentRuntime
+ * (used by in-process worker transport in Electron desktop mode).
+ */
+export async function runTaskTurnInKernel(
+  kernel: DesktopMainKernel,
+  taskId: TaskId,
+  runId: RunId,
+  epoch: Epoch,
+): Promise<{ endReason: string; error?: string }> {
+  const task = kernel.storage.tasks.getById(taskId);
+  if (!task) return { endReason: 'model_error', error: '任务不存在' };
+  const provider = kernel.storage.providers.getDefault();
+  if (!provider) {
+    return { endReason: 'model_error', error: '请先在设置页配置并测试默认 BYOK 模型服务商' };
+  }
+
+  kernel.storage.runs.create({
+    id: runId,
+    taskId,
+    epoch,
+    providerSnapshot: {
+      providerId: provider.id,
+      providerName: provider.name,
+      providerType: provider.providerType,
+      baseUrl: provider.baseUrl,
+      modelId: provider.modelId,
+      capabilities: provider.capabilities,
+    },
+    skillCatalogVersion: kernel.skills.getCatalogVersion(),
+    startedAt: new Date().toISOString() as IsoTimestamp,
+  });
+
+  const outcome = await kernel.agentEngine.runtime.startRun({
+    taskId,
+    runId,
+    epoch,
+    sessionId: `${task.kind}-${task.id}` as SessionId,
+    role: task.kind,
+    provider,
+    profileVersionId: task.profileVersionId,
+    authorizedMaterialIds: kernel.storage.tasks.listAuthorizedMaterialIds(taskId),
+    skillCatalogVersion: kernel.skills.getCatalogVersion(),
+  });
+
+  kernel.storage.runs.finish(runId, {
+    endReason: outcome.endReason,
+    finishedAt: new Date().toISOString(),
+    usage: outcome.usage,
+    errorCode: outcome.error?.code,
+    errorMessage: outcome.error?.message,
+  });
+
+  return { endReason: outcome.endReason, error: outcome.error?.message };
+}
+
 export * from './ipc-router.js';
 export * from './worker-supervisor.js';
+export * from './runtime-assembly.js';
