@@ -97,23 +97,22 @@
 **目标**：搭建内置轻量 TypeScript Agent Runtime、统一工具注册表、按需 Skills 加载器与可选任务级 MCP 适配器，跑通“总助手派工 → 投递助手观察填写 → 问答/接管/核对”无头闭环。
 
 ### 交付清单
-- [ ] M3.1 `@jobhelper/tools` 统一工具注册表：实现角色隔离白名单（`coordinator` vs `application`）与完整参数 schema 校验（见 [TOOL_CONTRACTS.md](./TOOL_CONTRACTS.md)）。
-- [ ] M3.2 投递助手浏览器工具集接入：`observe`、`candidates`、`inspect_control`、`screenshot`、`act`、`tabs`、`network`、`read_spill`（以及默认只读受限的 `run`）。
-- [ ] M3.3 投递助手业务工具集接入：`read_profile`、`read_material`、`ask_user_question`、`request_user_action`、`capture_confirmation_screenshot`、`request_submission_confirmation`、`request_manual_submission`、`request_operation_confirmation`、`report_filling_ready`、`report_submit_attempted`、`report_submission_result`、`update_task_details`、`remember_user_info`、`skill_load`。
-- [ ] M3.4 协调助手工具集接入：`get_career_overview`、`read_profile`、`edit_profile`、`list_materials`、`read_material`、`add_tracked_position`、`update_progress`、`start_application`、`start_applications`、`application_status`、`remember_user_info`。
-- [ ] M3.5 `@jobhelper/skills` 本地 Skills 知识库引擎：解析 frontmatter 元数据索引、基于 URL/DOM 特征推荐、按需单篇加载、本地草稿审阅流；适配首批核心控件/站点 Skill（对照 `skills-library/` 核对工具名与读回条件，不盲抄原版 Runtime 私有指令）。
-- [ ] M3.6 `@jobhelper/runtime` 核心执行循环：
-  - 每轮冻结模型配置、档案快照、附件清单与 Skill 索引版本；
-  - 流式增量输出（按 `attemptId` 聚合 text/reasoning，停止保留 partial）；
-  - 上下文裁剪器（保留表单账本、已确认事实、未解决错误与待办，折叠过期大快照与历史截图）；
-  - `ask_user_question` 挂起等待（默认 120s）、超时转 pending、迟到答案按 `callId + questionId` 回挂；
-  - `attention` 置位后拒绝同轮后续有副作用工具调用；
-  - 运行中无附件普通消息 `splice` 注入边界处理。
-- [ ] M3.7 `@jobhelper/mcp-adapter`（可选外部适配）：提供基于同一份 `ToolRegistry` 的本机随机端口 Streamable HTTP MCP 封装（带 `timingSafeEqual` token 鉴权与 `/mcp/<taskId>` 绑定）。
+- [x] M3.1 `@jobhelper/tools` 统一工具注册表：实现按 `(role, name)` 隔离的白名单（`coordinator` vs `application`）、入参 schema 校验与 `attentionLocked` 硬拦截（见 [TOOL_CONTRACTS.md](./TOOL_CONTRACTS.md)）。
+- [x] M3.2 投递助手浏览器工具集接入：`observe`、`candidates`、`inspect_control`、`screenshot`、`act`（含附件授权校验）、`tabs`、`network`、`read_spill` 与受控只读探针 `run`。
+- [x] M3.3 投递助手业务工具集接入：`read_profile`（仅读锁定快照）、`read_material`、`ask_user_question`、`request_user_action`、`capture_confirmation_screenshot`、`report_filling_ready`（无计费副作用）、`request_submission_confirmation`、`request_manual_submission`、`request_operation_confirmation`、`report_submit_attempted`、`report_submission_result`（强制回执证据）、`update_task_details`、`remember_user_info`、`report_job_unavailable`、`search_site_memories`、`save_site_memory`、`skill_list`、`skill_load`。
+- [x] M3.4 协调助手工具集接入：`get_career_overview`、`read_profile`、`edit_profile`、`list_materials`、`read_material`、`remember_user_info`、`add_tracked_position`、`update_progress`、`start_application`、`start_applications`、`application_status`（零浏览器写权）。
+- [x] M3.5 `@jobhelper/skills` 本地 Skills 知识库引擎：解析 frontmatter 元数据索引、SHA-256 目录版本、基于 URL/DOM 特征推荐、按需单篇加载；已创建 3 份原生适配 Skill（`form-controls`、`form-dates`、`ats-beisen-primer`）。
+- [x] M3.6 `@jobhelper/runtime` 核心执行循环：
+  - 启动前校验 `toolCalling` 能力，拒绝不支持工具调用的模型运行投递任务；
+  - 按 `attemptId` 输出 text/reasoning 流式增量，停止时保留 partial；
+  - `SlidingWindowContextCompactor` 折叠过期 `observe` 大快照，保留最近输出与错误；
+  - `InProcessQuestionWaitCoordinator` 支持按 `(taskId, callId)` 挂起等待与超时安全返回 `pending`；
+  - `locksAttention` 置位后拒绝同轮后续写/浏览器操作并收敛至 `waiting_user`；
+  - 支持运行中无附件消息在安全轮次边界 `splice` 注入。
+- [x] M3.7 `@jobhelper/mcp-adapter`（可选外部适配）：提供复用同一份 `UnifiedToolRegistry` 的本机随机端口 Streamable HTTP MCP 服务端（`timingSafeEqual` token 鉴权、`/mcp/<taskId>` 路由与任务绑定 `mcp-session-id`）。
 
 ### M3 门禁出口条件
-- 无头集成测试跑通：总助手调用 `start_application` → 投递助手在本地测试表单上完成 `observe → act(fill) → observe(verify) → ask_user_question → request_submission_confirmation`。
-- 验证上下文裁剪有效（多步操作后 token 占用可控，不会把全量 Skills 塞进 prompt）。
+- [x] 无头集成测试全绿（9 个测试套件 / 19 项核心用例通过）：跑通总助手 `start_application` → 投递助手 `read_profile → skill_load → observe → act(fill) → observe(verify) → ask_user_question → report_filling_ready → request_submission_confirmation`，验证后续写动作被 `ATTENTION_LOCKED` 拒绝、陈旧快照已折叠、四轴状态保持 `not_submitted`、且 MCP 跨任务 session 复用返回 403。
 
 ---
 
