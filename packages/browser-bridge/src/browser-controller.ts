@@ -3,7 +3,9 @@ import type {
   BrowserActResult,
   BrowserObservationSnapshot,
   BrowserObserveNode,
+  ControlInspectionResult,
   Epoch,
+  MaterialId,
   TabId,
   TaskId,
   ViewportRect,
@@ -377,32 +379,129 @@ export class ScopedBrowserController implements ScopedBrowserExecutor {
       }
 
       if (command.action === 'upload') {
-        if (!command.materialId || !this.options.resolveAuthorizedFilePath) {
-          throw new Error('附件上传缺少已授权的 materialId 或文件路径解析器');
+        const ids: MaterialId[] =
+          command.materialIds && command.materialIds.length > 0
+            ? [...command.materialIds]
+            : command.materialId
+              ? [command.materialId]
+              : [];
+        if (ids.length === 0 || !this.options.resolveAuthorizedFilePath) {
+          throw new Error('附件上传缺少已授权的 materialId/materialIds 或文件路径解析器');
         }
-        const { filePath, fileName } = this.options.resolveAuthorizedFilePath(
-          command.taskId,
-          command.materialId,
+        const resolvedFiles = ids.map((id) =>
+          this.options.resolveAuthorizedFilePath!(command.taskId, id),
         );
         await this.sendCdp(tab, command.taskId, command.epoch, 'DOM.setFileInputFiles', {
           backendNodeId: refEntry.backendDOMNodeId,
-          files: [filePath],
+          files: resolvedFiles.map((f) => f.filePath),
         });
-        const uploadedName = (await this.callOnObject(
+        const rawUploaded = await this.callOnObject(
           tab,
           command.taskId,
           command.epoch,
           objectId,
-          'function() { return this.files && this.files[0] ? this.files[0].name : ""; }',
-        )) as string;
-        if (uploadedName && uploadedName !== fileName) {
-          throw new Error(`上传文件回读不一致: 期望 "${fileName}"，实际 "${uploadedName}"`);
+          'function() { return Array.from(this.files || []).map(f => f.name); }',
+        );
+        const uploadedNames = Array.isArray(rawUploaded)
+          ? rawUploaded.map((x) => String(x))
+          : typeof rawUploaded === 'string' && rawUploaded.length > 0
+            ? [rawUploaded]
+            : [];
+        const expectedNames = resolvedFiles.map((f) => f.fileName);
+        if (uploadedNames.length > 0) {
+          if (
+            uploadedNames.length !== expectedNames.length ||
+            expectedNames.some((expected, idx) => uploadedNames[idx] !== expected)
+          ) {
+            throw new Error(
+              `上传文件回读不一致: 期望 "${expectedNames.join(', ')}"，实际 "${uploadedNames.join(', ')}"`,
+            );
+          }
         }
         return {
           ok: true,
           changed: true,
-          readbackValue: uploadedName || fileName,
+          readbackValue: (uploadedNames.length > 0 ? uploadedNames : expectedNames).join(', '),
           nextHint: '附件已选择，请重新 observe 确认页面状态',
+        };
+      }
+
+      if (command.action === 'choose_option') {
+        const steps = (
+          command.optionPath && command.optionPath.length > 0
+            ? command.optionPath
+            : command.optionText
+              ? [command.optionText]
+              : []
+        )
+          .map((s) => s.trim())
+          .filter(Boolean);
+        if (steps.length === 0) {
+          throw new Error('choose_option 缺少 optionText 或 optionPath');
+        }
+
+        const triggerPt = (await this.callOnObject(
+          tab,
+          command.taskId,
+          command.epoch,
+          objectId,
+          `function() {
+            if (!this.isConnected || this.disabled) throw new Error('自定义选择器不可点击');
+            if (typeof this.scrollIntoView === 'function') this.scrollIntoView({ block: 'center', inline: 'nearest' });
+            const r = this.getBoundingClientRect();
+            if (!r.width || !r.height) throw new Error('自定义选择器不可见');
+            return { x: r.left + r.width / 2, y: r.top + r.height / 2 };
+          }`,
+        )) as { x: number; y: number };
+        await this.dispatchClick(tab, command.taskId, command.epoch, triggerPt.x, triggerPt.y);
+
+        if (command.searchQuery && command.searchQuery.trim().length > 0) {
+          const searchInfo = await this.focusVisibleSearchInput(tab, command.taskId, command.epoch);
+          if (searchInfo.found) {
+            const fillDecision = this.options.submitGuard.evaluateCommand(
+              { ...command, action: 'fill', value: command.searchQuery },
+              searchInfo.metadata,
+            );
+            if (!fillDecision.allowed) {
+              return { ok: false, guardBlocked: fillDecision, error: fillDecision.reason };
+            }
+            await this.sendCdp(tab, command.taskId, command.epoch, 'Input.insertText', {
+              text: command.searchQuery.trim(),
+            });
+          }
+        }
+
+        for (const stepText of steps) {
+          const match = await this.findVisibleOptionByText(tab, command.taskId, command.epoch, stepText);
+          if (!match.found || match.x === undefined || match.y === undefined) {
+            throw new Error(`未找到可见下拉/级联选项: "${stepText}"`);
+          }
+          const optDecision = this.options.submitGuard.evaluateCommand(
+            { ...command, action: 'click', ref: undefined },
+            match.metadata,
+          );
+          if (!optDecision.allowed) {
+            return { ok: false, guardBlocked: optDecision, error: optDecision.reason };
+          }
+          await this.dispatchClick(tab, command.taskId, command.epoch, match.x, match.y);
+        }
+
+        const readback = (await this.callOnObject(
+          tab,
+          command.taskId,
+          command.epoch,
+          objectId,
+          `function() {
+            if (typeof this.value === 'string' && this.value.trim()) return this.value.trim();
+            return (this.innerText || this.textContent || '').trim();
+          }`,
+        )) as string | undefined;
+
+        return {
+          ok: true,
+          changed: true,
+          readbackValue: readback || steps.join(' / '),
+          nextHint: '自定义选项已选择，请重新 observe 核对联动状态',
         };
       }
 
@@ -432,6 +531,349 @@ export class ScopedBrowserController implements ScopedBrowserExecutor {
       }
       this.invalidateTab(tab.id);
     }
+  }
+
+  async inspectControl(
+    taskId: TaskId,
+    epoch: Epoch,
+    ref: string,
+    tabId?: TabId,
+  ): Promise<ControlInspectionResult> {
+    this.options.assertActive(taskId, epoch);
+    const tab = this.resolveTab(taskId, tabId);
+    const state = this.getTabState(tab);
+    const refEntry = state.refs.get(ref);
+    if (!refEntry || refEntry.generation !== state.generation) {
+      throw new Error('ref 已失效，请先重新 observe 获取最新页面快照');
+    }
+
+    const resolved = (await this.sendCdp(tab, taskId, epoch, 'DOM.resolveNode', {
+      backendNodeId: refEntry.backendDOMNodeId,
+      objectGroup: 'jobhelper-inspect',
+    })) as { object?: { objectId?: string } };
+    const objectId = resolved.object?.objectId;
+    if (!objectId) {
+      throw new Error('元素已从页面移除，请重新 observe');
+    }
+
+    try {
+      const detail = (await this.callOnObject(
+        tab,
+        taskId,
+        epoch,
+        objectId,
+        `function() {
+          const tag = (this.tagName || '').toUpperCase();
+          const inputType = typeof this.type === 'string' ? this.type : '';
+          const buttonType = (this.getAttribute && this.getAttribute('type')) || inputType || '';
+          const role = (this.getAttribute && this.getAttribute('role')) || '';
+          const accessibleLabel = [
+            this.getAttribute && this.getAttribute('aria-label'),
+            this.innerText,
+            this.placeholder,
+          ].filter(Boolean).join(' ').trim();
+          const fieldIdentityText = [
+            this.name,
+            this.id,
+            this.placeholder,
+            this.getAttribute && this.getAttribute('autocomplete'),
+          ].filter(Boolean).join(' ').trim();
+          const isPassword = inputType.toLowerCase() === 'password';
+          const optionsPreview = tag === 'SELECT'
+            ? Array.from(this.options || []).slice(0, 30).map(o => ({
+                value: String(o.value ?? ''),
+                label: String(o.text ?? o.label ?? ''),
+                disabled: Boolean(o.disabled),
+              }))
+            : undefined;
+          return {
+            tagName: tag,
+            role: role || undefined,
+            inputType: inputType || undefined,
+            buttonType: buttonType || undefined,
+            accessibleLabel: accessibleLabel || undefined,
+            value: isPassword ? '[密码]' : (typeof this.value === 'string' ? this.value : undefined),
+            masked: isPassword || undefined,
+            placeholder: typeof this.placeholder === 'string' && this.placeholder ? this.placeholder : undefined,
+            readOnly: Boolean(this.readOnly || (this.getAttribute && this.getAttribute('aria-readonly') === 'true')),
+            disabled: Boolean(this.disabled || (this.getAttribute && this.getAttribute('aria-disabled') === 'true')),
+            required: Boolean(this.required || (this.getAttribute && this.getAttribute('aria-required') === 'true')),
+            checked: typeof this.checked === 'boolean' ? this.checked : undefined,
+            multiple: typeof this.multiple === 'boolean' ? this.multiple : undefined,
+            inForm: Boolean(this.form || (this.closest && this.closest('form'))),
+            inCrossOriginIframe: Boolean(this.ownerDocument && this.ownerDocument.defaultView !== window.top),
+            fieldIdentityText: fieldIdentityText || undefined,
+            optionsPreview,
+          };
+        }`,
+      )) as Omit<ControlInspectionResult, 'ref' | 'clickGuard' | 'fillGuard'> & {
+        fieldIdentityText?: string;
+      };
+
+      const isMasked = Boolean(detail.masked || refEntry.metadata?.inputType === 'password');
+      const mergedMeta: TargetElementMetadata = {
+        ...refEntry.metadata,
+        tagName: detail.tagName,
+        inputType: isMasked ? 'password' : detail.inputType,
+        buttonType: detail.buttonType,
+        accessibleLabel: detail.accessibleLabel || refEntry.metadata?.accessibleLabel,
+        inForm: detail.inForm,
+        inCrossOriginIframe: detail.inCrossOriginIframe,
+        fieldIdentityText: detail.fieldIdentityText || refEntry.metadata?.fieldIdentityText,
+      };
+
+      return {
+        ref,
+        tagName: detail.tagName,
+        role: detail.role,
+        inputType: isMasked ? 'password' : detail.inputType,
+        buttonType: detail.buttonType,
+        accessibleLabel: mergedMeta.accessibleLabel,
+        value: isMasked ? '[密码]' : detail.value,
+        masked: isMasked || undefined,
+        placeholder: detail.placeholder,
+        readOnly: detail.readOnly,
+        disabled: detail.disabled,
+        required: detail.required,
+        checked: detail.checked,
+        multiple: detail.multiple,
+        inForm: detail.inForm,
+        inCrossOriginIframe: detail.inCrossOriginIframe,
+        optionsPreview: detail.optionsPreview,
+        clickGuard: this.options.submitGuard.evaluateCommand(
+          { taskId, epoch, action: 'click', ref },
+          mergedMeta,
+        ),
+        fillGuard: this.options.submitGuard.evaluateCommand(
+          { taskId, epoch, action: 'fill', ref },
+          mergedMeta,
+        ),
+      };
+    } finally {
+      if (!tab.view.webContents.isDestroyed() && tab.view.webContents.debugger.isAttached()) {
+        await tab.view.webContents.debugger
+          .sendCommand('Runtime.releaseObjectGroup', { objectGroup: 'jobhelper-inspect' })
+          .catch(() => {});
+      }
+    }
+  }
+
+  async runReadOnlyProbe(
+    taskId: TaskId,
+    epoch: Epoch,
+    probe: string,
+    _args?: Record<string, unknown>,
+    tabId?: TabId,
+  ): Promise<Record<string, unknown>> {
+    this.options.assertActive(taskId, epoch);
+    const decision = this.options.submitGuard.evaluateScriptProbe(probe);
+    if (!decision.allowed) {
+      throw new Error(decision.reason ?? `不允许的探针: ${probe}`);
+    }
+    const tab = this.resolveTab(taskId, tabId);
+
+    const expressions: Record<string, string> = {
+      dom_summary: `(() => {
+        const requiredEls = Array.from(document.querySelectorAll('[required], [aria-required="true"]'));
+        const emptyRequiredLabels = requiredEls
+          .filter(el => !el.disabled && ((typeof el.value === 'string' && !el.value.trim()) || (el.type === 'checkbox' && !el.checked)))
+          .slice(0, 25)
+          .map(el => (el.getAttribute('aria-label') || el.name || el.placeholder || el.id || el.tagName).trim());
+        const sectionHeadings = Array.from(document.querySelectorAll('h1, h2, h3, legend, .section-title, .item-section-tpl'))
+          .map(el => (el.innerText || '').trim())
+          .filter(Boolean)
+          .slice(0, 25);
+        return {
+          probe: 'dom_summary',
+          url: location.href,
+          title: document.title,
+          formsCount: document.forms.length,
+          requiredFieldsCount: requiredEls.length,
+          emptyRequiredLabels,
+          sectionHeadings,
+          fileInputsCount: document.querySelectorAll('input[type="file"]').length,
+          iframesCount: document.querySelectorAll('iframe').length,
+        };
+      })()`,
+      form_errors: `(() => {
+        const selectors = [
+          '[aria-invalid="true"]',
+          '[role="alert"]',
+          '.ant-form-explain',
+          '.ant-form-item-explain-error',
+          '.formily-item-explain-error',
+          '.el-form-item__error',
+          '.phoenix-error',
+          '.sd-error',
+          '.field-error',
+          '.error-message',
+        ];
+        const texts = new Set();
+        for (const el of document.querySelectorAll(selectors.join(','))) {
+          const r = el.getBoundingClientRect();
+          if (r.width === 0 && r.height === 0) continue;
+          const t = (el.innerText || el.getAttribute('aria-errormessage') || el.getAttribute('aria-label') || el.name || '').trim();
+          if (t) texts.add(t.slice(0, 160));
+          if (texts.size >= 30) break;
+        }
+        const errors = Array.from(texts);
+        return { probe: 'form_errors', errorCount: errors.length, errors };
+      })()`,
+      custom_control_state: `(() => {
+        const popupSelectors = [
+          '[role="listbox"]',
+          '[role="menu"]',
+          '[role="dialog"]',
+          '.ant-select-dropdown',
+          '.ant-cascader-menus',
+          '.ant-picker-dropdown',
+          '.el-select-dropdown',
+          '.phoenix-select-dropdown',
+          '.sd-Select-menu',
+        ];
+        const openPopups = Array.from(document.querySelectorAll(popupSelectors.join(',')))
+          .filter(el => {
+            const r = el.getBoundingClientRect();
+            const style = window.getComputedStyle(el);
+            return r.width > 0 && r.height > 0 && style.display !== 'none' && style.visibility !== 'hidden';
+          });
+        const visibleOptions = [];
+        for (const pop of openPopups) {
+          for (const opt of pop.querySelectorAll('[role="option"], [role="menuitem"], [role="treeitem"], li, button')) {
+            const r = opt.getBoundingClientRect();
+            if (!r.width || !r.height) continue;
+            const text = (opt.innerText || '').trim();
+            if (text && !visibleOptions.includes(text)) visibleOptions.push(text.slice(0, 80));
+            if (visibleOptions.length >= 40) break;
+          }
+          if (visibleOptions.length >= 40) break;
+        }
+        return {
+          probe: 'custom_control_state',
+          activeElementTag: document.activeElement ? document.activeElement.tagName : null,
+          openPopupsCount: openPopups.length,
+          visibleOptions,
+        };
+      })()`,
+    };
+
+    const res = (await this.sendCdp(tab, taskId, epoch, 'Runtime.evaluate', {
+      expression: expressions[probe],
+      returnByValue: true,
+    })) as { result?: { value?: Record<string, unknown> } };
+    return res.result?.value ?? { probe, ok: true };
+  }
+
+  private async focusVisibleSearchInput(
+    tab: ManagedTab,
+    taskId: TaskId,
+    epoch: Epoch,
+  ): Promise<{ found: boolean; metadata?: TargetElementMetadata }> {
+    const res = (await this.sendCdp(tab, taskId, epoch, 'Runtime.evaluate', {
+      expression: `(() => {
+        const candidates = [
+          document.activeElement,
+          ...Array.from(document.querySelectorAll(
+            '[role="combobox"] input, [role="listbox"] input, .ant-select-dropdown input, .el-select-dropdown input, .sd-Select input, .phoenix-select input, input[type="search"]'
+          )),
+        ].filter(Boolean);
+        for (const el of candidates) {
+          if (el.tagName !== 'INPUT' || el.disabled || el.readOnly) continue;
+          const r = el.getBoundingClientRect();
+          if (!r.width || !r.height) continue;
+          el.focus();
+          if (typeof el.select === 'function') el.select();
+          return {
+            found: true,
+            metadata: {
+              tagName: el.tagName,
+              inputType: el.type || 'text',
+              accessibleLabel: [el.getAttribute('aria-label'), el.placeholder].filter(Boolean).join(' '),
+              fieldIdentityText: [el.name, el.id, el.placeholder, el.getAttribute('autocomplete')].filter(Boolean).join(' '),
+              inForm: Boolean(el.form || el.closest('form')),
+            },
+          };
+        }
+        return { found: false };
+      })()`,
+      returnByValue: true,
+    })) as { result?: { value?: { found: boolean; metadata?: TargetElementMetadata } } };
+    return res.result?.value ?? { found: false };
+  }
+
+  private async findVisibleOptionByText(
+    tab: ManagedTab,
+    taskId: TaskId,
+    epoch: Epoch,
+    targetText: string,
+  ): Promise<{
+    found: boolean;
+    x?: number;
+    y?: number;
+    matchedText?: string;
+    metadata?: TargetElementMetadata;
+  }> {
+    const res = (await this.sendCdp(tab, taskId, epoch, 'Runtime.evaluate', {
+      expression: `((target) => {
+        const norm = (s) => String(s || '').replace(/\\s+/g, ' ').trim();
+        const needle = norm(target).toLowerCase();
+        const selectors = [
+          '[role="option"]',
+          '[role="menuitem"]',
+          '[role="treeitem"]',
+          '.ant-select-item-option',
+          '.ant-cascader-menu-item',
+          '.ant-picker-cell-inner',
+          '.el-select-dropdown__item',
+          '.phoenix-select-option',
+          '.sd-Select-option',
+          '[role="listbox"] li',
+          '[role="menu"] li',
+          '.dropdown-option',
+          'li',
+        ];
+        const nodes = Array.from(document.querySelectorAll(selectors.join(',')));
+        let partialMatch = null;
+        for (const el of nodes) {
+          const r = el.getBoundingClientRect();
+          const style = window.getComputedStyle(el);
+          if (!r.width || !r.height || style.display === 'none' || style.visibility === 'hidden') continue;
+          if (el.disabled || el.getAttribute('aria-disabled') === 'true') continue;
+          const text = norm(el.innerText || el.textContent);
+          if (!text) continue;
+          const lower = text.toLowerCase();
+          const payload = {
+            found: true,
+            x: r.left + r.width / 2,
+            y: r.top + r.height / 2,
+            matchedText: text,
+            metadata: {
+              tagName: el.tagName,
+              inputType: el.type || '',
+              buttonType: (el.getAttribute && el.getAttribute('type')) || '',
+              accessibleLabel: [el.innerText, el.getAttribute && el.getAttribute('aria-label')].filter(Boolean).join(' '),
+              inForm: Boolean(el.form || (el.closest && el.closest('form'))),
+              inCrossOriginIframe: Boolean(el.ownerDocument && el.ownerDocument.defaultView !== window.top),
+            },
+          };
+          if (lower === needle) return payload;
+          if (!partialMatch && lower.includes(needle)) partialMatch = payload;
+        }
+        return partialMatch || { found: false };
+      })(${JSON.stringify(targetText)})`,
+      returnByValue: true,
+    })) as {
+      result?: {
+        value?: {
+          found: boolean;
+          x?: number;
+          y?: number;
+          matchedText?: string;
+          metadata?: TargetElementMetadata;
+        };
+      };
+    };
+    return res.result?.value ?? { found: false };
   }
 
   private async dispatchClick(

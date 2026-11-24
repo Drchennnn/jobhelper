@@ -190,14 +190,12 @@ export function assembleDesktopAgentEngine(deps: RuntimeAssemblyDeps): Assembled
         return deps.tabs.createTab(taskId, url, task.browserProfileId);
       },
       closeTab: (taskId, tabId) => deps.tabs.closeTab(taskId, tabId),
-      inspectControl: async (_taskId, _epoch, ref) => ({ ref, status: 'inspected' }),
+      inspectControl: async (taskId, epoch, ref) =>
+        (await deps.browserController.inspectControl(taskId, epoch, ref)) as unknown as Record<string, unknown>,
       listNetworkEvents: async () => [],
       readSpill: async () => ({ content: '', nextOffset: null }),
-      runReadOnlyProbe: async (_taskId, _epoch, probe) => {
-        const decision = deps.submitGuard.evaluateScriptProbe(probe);
-        if (!decision.allowed) throw new Error(decision.reason);
-        return { probe, ok: true };
-      },
+      runReadOnlyProbe: (taskId, epoch, probe, args) =>
+        deps.browserController.runReadOnlyProbe(taskId, epoch, probe, args),
     }),
   );
 
@@ -469,6 +467,18 @@ export function assembleDesktopAgentEngine(deps: RuntimeAssemblyDeps): Assembled
                 catalogVersion: doc.catalogVersion,
               }
             : null;
+        },
+        submitSkillDraft: ({ taskId, skillName, diffOrContent }) => {
+          const draft = {
+            id: crypto.randomUUID(),
+            skillName,
+            sourceTaskId: taskId,
+            diffOrContent,
+            status: 'draft' as const,
+            createdAt: new Date().toISOString() as IsoTimestamp,
+          };
+          deps.storage.siteMemories.saveSkillDraft(draft);
+          return draft;
         },
       },
       { captureScreenshot: captureAndStoreScreenshot },

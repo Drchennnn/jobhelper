@@ -13,21 +13,64 @@ describe('@jobhelper/skills LocalSkillCatalog', () => {
 
     const meta = catalog.listMetadata();
     const names = meta.map((m) => m.name);
-    expect(names).toContain('form-controls');
-    expect(names).toContain('form-dates');
-    expect(names).toContain('ats-beisen-primer');
+    expect(names).toEqual(
+      expect.arrayContaining([
+        'form-controls',
+        'form-dates',
+        'ats-beisen',
+        'ats-mokahr',
+        'ats-feishu',
+        'ats-hotjob',
+        'ats-hotjob-wt',
+        'ats-iguopin',
+      ]),
+    );
+    expect(names).toHaveLength(8);
     expect(meta.every((m) => m.source === 'builtin')).toBe(true);
 
-    const recommended = catalog.recommendForPage({
+    // Recommend accurately across major Chinese ATS systems
+    const beisenRec = catalog.recommendForPage({
       url: 'https://campus.zhiye.com/form?jobAdId=123',
       domHints: ['phoenix-select', 'phoenix-calendar'],
     });
-    expect(recommended.map((r) => r.name)).toContain('ats-beisen-primer');
-    expect(recommended.map((r) => r.name)).toContain('form-dates');
+    expect(beisenRec.map((r) => r.name)).toContain('ats-beisen');
+    expect(beisenRec.map((r) => r.name)).toContain('form-dates');
+
+    const mokaRec = catalog.recommendForPage({
+      url: 'https://app.mokahr.com/campus-recruitment/demo/12345',
+      domHints: ['sd-Select', 'sd-DatePicker'],
+    });
+    expect(mokaRec.map((r) => r.name)).toContain('ats-mokahr');
+
+    const feishuRec = catalog.recommendForPage({
+      url: 'https://jobs.bytedance.com/campus/position/123',
+      domHints: ['atsx-select', 'ud__input'],
+    });
+    expect(feishuRec.map((r) => r.name)).toContain('ats-feishu');
+
+    const hotjobWtRec = catalog.recommendForPage({
+      url: 'https://job.chinatelecom.com.cn/wt/chinatelecom/web/index',
+      domHints: ['dy-form', 'saveSet', 'Wdate'],
+    });
+    expect(hotjobWtRec.map((r) => r.name)).toContain('ats-hotjob-wt');
+
+    const iguopinRec = catalog.recommendForPage({
+      url: 'https://www.iguopin.com/job/detail?id=99',
+      domHints: ['apply-btn', 'item-section-tpl', 'ant-picker'],
+    });
+    expect(iguopinRec.map((r) => r.name)).toContain('ats-iguopin');
+
+    // Audit every built-in skill body: uses JobHelper safe contracts & contains zero forbidden unsafe Jinli tools
+    for (const entry of meta) {
+      const loaded = await catalog.loadSkill(entry.name);
+      expect(loaded).not.toBeNull();
+      expect(loaded?.bodyMarkdown).not.toMatch(/captcha_solve|sandbox_shell|eval_js/i);
+    }
 
     const doc = await catalog.loadSkill('form-controls');
     expect(doc).not.toBeNull();
     expect(doc?.bodyMarkdown).toContain('observe');
+    expect(doc?.bodyMarkdown).toContain('choose_option');
     expect(doc?.bodyMarkdown).toContain('request_submission_confirmation');
     expect(await catalog.loadSkill('non-existent-skill')).toBeNull();
   });

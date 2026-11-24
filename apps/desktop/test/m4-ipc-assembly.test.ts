@@ -125,9 +125,9 @@ describe('@jobhelper/desktop M4 Full IPC, Runtime/Tools Assembly & Option A Exte
     try {
       kernel.start();
 
-      // Verify full M3 toolsets are wired into the desktop kernel
+      // Verify full M3+M6 toolsets are wired into the desktop kernel
       expect(kernel.agentEngine.registry.listForRole('coordinator').length).toBe(11);
-      expect(kernel.agentEngine.registry.listForRole('application').length).toBe(27);
+      expect(kernel.agentEngine.registry.listForRole('application').length).toBe(28);
 
       // 1. Save BYOK provider -> key written to CredentialStore, NEVER echoed in DTO
       const savedProv = await api['providers:save']({
@@ -188,6 +188,32 @@ describe('@jobhelper/desktop M4 Full IPC, Runtime/Tools Assembly & Option A Exte
       );
       const loadedExt = await api['skills:load']({ skillName: 'ats-external-test' });
       expect(loadedExt?.bodyMarkdown).toContain('External Manual Body');
+
+      // 5. M6 Skill Draft loop: application submits draft -> Settings lists & approves it
+      const draftRes = await kernel.agentEngine.registry.invoke(
+        'submit_skill_draft',
+        {
+          skillName: 'ats-mokahr',
+          diffOrContent: '## 新增提示\n- 某企业站点需要等待 500ms 远程院校搜索',
+        },
+        {
+          taskId,
+          role: 'application',
+          runId: 'run-draft-1' as never,
+          epoch: 1 as never,
+          callId: 'call-draft-1',
+          authorizedMaterialIds: [],
+          signal: new AbortController().signal,
+        },
+      );
+      expect(draftRes.ok).toBe(true);
+      const pendingDrafts = await api['skills:listDrafts']({ status: 'draft' });
+      expect(pendingDrafts).toHaveLength(1);
+      expect(pendingDrafts[0]?.skillName).toBe('ats-mokahr');
+      await api['skills:reviewDraft']({ draftId: pendingDrafts[0]!.id, status: 'approved' });
+      const approvedDrafts = await api['skills:listDrafts']({ status: 'approved' });
+      expect(approvedDrafts).toHaveLength(1);
+      expect(approvedDrafts[0]?.reviewedAt).toBeTruthy();
     } finally {
       await kernel.shutdown();
       fs.rmSync(tmpDir, { recursive: true, force: true });

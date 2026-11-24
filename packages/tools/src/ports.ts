@@ -17,6 +17,7 @@ import type {
   QuestionItem,
   RunId,
   SiteMemoryRecord,
+  SkillDraftRecord,
   StartApplicationInput,
   TabId,
   TaskId,
@@ -129,6 +130,11 @@ export interface ApplicationBusinessPort {
   saveSiteMemory(input: { domain: string; title: string; content: string }): SiteMemoryRecord;
   listSkills(filter?: { domain?: string }): Array<{ name: string; description: string; category: string }>;
   loadSkill(skillName: string): Promise<{ name: string; bodyMarkdown: string; catalogVersion: string } | null>;
+  submitSkillDraft?(input: {
+    taskId: TaskId;
+    skillName: string;
+    diffOrContent: string;
+  }): SkillDraftRecord;
 }
 
 export interface CoordinatorBusinessPort {

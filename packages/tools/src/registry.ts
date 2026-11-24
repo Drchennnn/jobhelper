@@ -50,6 +50,7 @@ export const APPLICATION_BUSINESS_TOOL_NAMES = [
   'save_site_memory',
   'skill_list',
   'skill_load',
+  'submit_skill_draft',
 ] as const;
 
 export type CoordinatorToolName = (typeof COORDINATOR_TOOL_NAMES)[number];

@@ -3,6 +3,7 @@ export * from './errors.js';
 export * from './credentials.js';
 export * from './sse.js';
 export * from './probe.js';
+export * from './benchmark.js';
 export * from './byok-router.js';
 export * from './adapters/openai-compatible.js';
 export * from './adapters/anthropic.js';
