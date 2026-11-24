@@ -21,7 +21,11 @@ export default defineConfig({
   },
   test: {
     environment: 'node',
-    include: ['packages/*/test/**/*.test.ts', 'apps/*/test/**/*.test.ts'],
+    include: [
+      'packages/*/test/**/*.test.ts',
+      'apps/*/test/**/*.test.ts',
+      'apps/*/test/**/*.test.tsx',
+    ],
     testTimeout: 15_000,
     hookTimeout: 15_000,
     reporters: ['default'],
