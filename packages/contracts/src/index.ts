@@ -5,4 +5,5 @@ export * from './model.js';
 export * from './browser.js';
 export * from './tools.js';
 export * from './events.js';
+export * from './records.js';
 export * from './ipc.js';
