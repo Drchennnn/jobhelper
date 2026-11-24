@@ -491,5 +491,34 @@ export function createApplicationBusinessTools(
         return { ok: true, data: doc };
       },
     },
+    {
+      name: 'submit_skill_draft',
+      description: '提交一条站点 Skill 修订或新增草稿到本地待审列表，需经用户在设置页审阅批准，严禁直接覆盖内置 Skill。',
+      category: 'skill',
+      allowedRoles: ['application'],
+      mutating: true,
+      inputSchema: {
+        type: 'object',
+        required: ['skillName', 'diffOrContent'],
+        properties: {
+          skillName: { type: 'string' },
+          diffOrContent: { type: 'string' },
+        },
+      },
+      execute: async (input: { skillName: string; diffOrContent: string }, ctx) => {
+        if (!port.submitSkillDraft) {
+          return {
+            ok: false,
+            error: { code: 'DRAFT_UNSUPPORTED', message: '当前环境未启用 Skill 草稿存储' },
+          };
+        }
+        const draft = port.submitSkillDraft({
+          taskId: ctx.taskId,
+          skillName: input.skillName.trim(),
+          diffOrContent: input.diffOrContent,
+        });
+        return { ok: true, data: { draft } };
+      },
+    },
   ];
 }

@@ -100,7 +100,7 @@ export function createApplicationBrowserTools(port: BrowserToolsPort): ToolDefin
     {
       name: 'act',
       description:
-        '对当前任务招聘网页执行受控操作（click/fill/select/check/scroll/press/upload/navigate）。受 Submit Hard-Guard 保护，禁止自动填写密码/验证码或自动最终提交。',
+        '对当前任务招聘网页执行受控操作（click/fill/select/choose_option/check/scroll/press/upload/navigate）。受 Submit Hard-Guard 保护，禁止自动填写密码/验证码或自动最终提交。',
       category: 'browser',
       allowedRoles: ['application'],
       mutating: true,
@@ -110,12 +110,26 @@ export function createApplicationBrowserTools(port: BrowserToolsPort): ToolDefin
         properties: {
           action: {
             type: 'string',
-            enum: ['click', 'fill', 'select', 'check', 'scroll', 'press', 'upload', 'navigate'],
+            enum: [
+              'click',
+              'fill',
+              'select',
+              'choose_option',
+              'check',
+              'scroll',
+              'press',
+              'upload',
+              'navigate',
+            ],
           },
           tabId: { type: 'string' },
           ref: { type: 'string' },
           value: { type: 'string' },
+          optionText: { type: 'string' },
+          optionPath: { type: 'array' },
+          searchQuery: { type: 'string' },
           materialId: { type: 'string' },
+          materialIds: { type: 'array' },
           key: { type: 'string' },
           dy: { type: 'number' },
           url: { type: 'string' },
@@ -128,7 +142,11 @@ export function createApplicationBrowserTools(port: BrowserToolsPort): ToolDefin
           tabId?: string;
           ref?: string;
           value?: string;
+          optionText?: string;
+          optionPath?: string[];
+          searchQuery?: string;
           materialId?: string;
+          materialIds?: string[];
           key?: string;
           dy?: number;
           url?: string;
@@ -137,12 +155,21 @@ export function createApplicationBrowserTools(port: BrowserToolsPort): ToolDefin
         ctx,
       ) => {
         if (input.action === 'upload') {
-          if (!input.materialId || !ctx.authorizedMaterialIds.includes(input.materialId as MaterialId)) {
+          const requestedIds =
+            input.materialIds && input.materialIds.length > 0
+              ? input.materialIds
+              : input.materialId
+                ? [input.materialId]
+                : [];
+          if (
+            requestedIds.length === 0 ||
+            requestedIds.some((id) => !ctx.authorizedMaterialIds.includes(id as MaterialId))
+          ) {
             return {
               ok: false,
               error: {
                 code: 'UNAUTHORIZED_MATERIAL',
-                message: '上传附件必须使用当前任务已授权的 materialId',
+                message: '上传附件必须全部使用当前任务已授权的 materialId / materialIds',
               },
             };
           }
@@ -154,7 +181,11 @@ export function createApplicationBrowserTools(port: BrowserToolsPort): ToolDefin
           action: input.action,
           ref: input.ref,
           value: input.value,
+          optionText: input.optionText,
+          optionPath: input.optionPath,
+          searchQuery: input.searchQuery,
           materialId: input.materialId as MaterialId | undefined,
+          materialIds: input.materialIds as MaterialId[] | undefined,
           key: input.key,
           dy: input.dy,
           url: input.url,

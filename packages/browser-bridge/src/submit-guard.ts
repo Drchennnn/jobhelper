@@ -101,7 +101,50 @@ export class DefaultSubmitHardGuard implements SubmitHardGuard {
       return { allowed: true };
     }
 
-    // 3. Click guard (covers both ref-based clicks and coordinate clicks resolved via elementFromPoint)
+    // 3. Custom dropdown / cascade option picker guard (blocks submit triggers, sensitive fields, and submit-like option labels)
+    if (command.action === 'choose_option') {
+      if (targetMetadata?.inCrossOriginIframe) {
+        return {
+          allowed: false,
+          matchedRule: 'cross_iframe_click',
+          reason: '跨 iframe 自定义选择器无法安全校验目标元素，请由用户接管完成',
+        };
+      }
+
+      const inputType = (targetMetadata?.inputType ?? '').toLowerCase();
+      const identity = targetMetadata?.fieldIdentityText ?? targetMetadata?.accessibleLabel ?? '';
+      if (inputType === 'password' || SENSITIVE_FIELD_REGEX.test(identity)) {
+        return {
+          allowed: false,
+          matchedRule: 'password_or_captcha_field',
+          reason: '密码、短信验证码与图形验证码控件禁止自动操作，请交给用户接管处理',
+        };
+      }
+
+      const tag = (targetMetadata?.tagName ?? '').toUpperCase();
+      const buttonType = (targetMetadata?.buttonType ?? '').toLowerCase();
+      const label = (targetMetadata?.accessibleLabel ?? '').trim();
+      const candidateOptionLabels = [
+        ...(command.optionPath ?? []),
+        ...(command.optionText ? [command.optionText] : []),
+      ].map((s) => s.trim());
+
+      const isSubmitButtonType =
+        (tag === 'BUTTON' && buttonType === 'submit') || (tag === 'INPUT' && inputType === 'submit');
+      const isSubmitTrigger = label.length > 0 && FINAL_SUBMIT_LABEL_REGEX.test(label);
+      const isSubmitOption = candidateOptionLabels.some((opt) => opt.length > 0 && FINAL_SUBMIT_LABEL_REGEX.test(opt));
+
+      if (isSubmitButtonType || isSubmitTrigger || isSubmitOption) {
+        return {
+          allowed: false,
+          matchedRule: isSubmitButtonType ? 'submit_button_type' : 'submit_label',
+          reason: 'choose_option 仅允许操作表单选择控件，禁止触发任何最终提交动作',
+        };
+      }
+      return { allowed: true };
+    }
+
+    // 4. Click guard (covers both ref-based clicks and coordinate clicks resolved via elementFromPoint)
     if (command.action === 'click') {
       if (targetMetadata?.inCrossOriginIframe) {
         return {

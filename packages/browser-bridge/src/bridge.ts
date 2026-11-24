@@ -3,6 +3,7 @@ import type {
   BrowserActResult,
   BrowserObservationSnapshot,
   BrowserProfileId,
+  ControlInspectionResult,
   Epoch,
   SubmitGuardDecision,
   SubmitGuardMode,
@@ -55,6 +56,14 @@ export interface SubmitHardGuard {
 export interface ScopedBrowserExecutor {
   observe(taskId: TaskId, epoch: Epoch, tabId?: TabId): Promise<BrowserObservationSnapshot>;
   act(command: BrowserActCommand): Promise<BrowserActResult>;
+  inspectControl?(taskId: TaskId, epoch: Epoch, ref: string, tabId?: TabId): Promise<ControlInspectionResult>;
+  runReadOnlyProbe?(
+    taskId: TaskId,
+    epoch: Epoch,
+    probe: string,
+    args?: Record<string, unknown>,
+    tabId?: TabId,
+  ): Promise<Record<string, unknown>>;
   captureScreenshot(
     taskId: TaskId,
     epoch: Epoch,
