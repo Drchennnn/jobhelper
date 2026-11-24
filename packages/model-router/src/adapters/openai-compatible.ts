@@ -112,20 +112,37 @@ export class OpenAiCompatibleAdapter implements ModelProviderAdapter {
     }
 
     let response: Response;
-    try {
-      response = await fetch(url, {
-        method: 'POST',
-        headers,
-        body: JSON.stringify(body),
-        signal: request.signal,
-      });
-    } catch (error) {
-      throw normalizeFetchFailure(error, this.providerType, false, [apiKey]);
-    }
+    const postBody = async (payload: Record<string, unknown>): Promise<Response> => {
+      try {
+        return await fetch(url, {
+          method: 'POST',
+          headers,
+          body: JSON.stringify(payload),
+          signal: request.signal,
+        });
+      } catch (error) {
+        throw normalizeFetchFailure(error, this.providerType, false, [apiKey]);
+      }
+    };
+
+    response = await postBody(body);
 
     if (!response.ok) {
       const errBody = await response.text().catch(() => '');
-      throw classifyHttpError(response.status, errBody, this.providerType, [apiKey]);
+      // Graceful fallback for OpenAI-compatible gateways that reject `stream_options` with HTTP 400
+      if (response.status === 400 && /stream_options|unknown|unrecognized/i.test(errBody)) {
+        const fallbackBody = { ...body };
+        delete fallbackBody.stream_options;
+        const retryRes = await postBody(fallbackBody);
+        if (retryRes.ok) {
+          response = retryRes;
+        } else {
+          const retryErr = await retryRes.text().catch(() => '');
+          throw classifyHttpError(retryRes.status, retryErr, this.providerType, [apiKey]);
+        }
+      } else {
+        throw classifyHttpError(response.status, errBody, this.providerType, [apiKey]);
+      }
     }
 
     const contentType = response.headers.get('content-type') ?? '';

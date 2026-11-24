@@ -142,7 +142,14 @@ export function createDesktopMainKernel(options: DesktopKernelOptions): DesktopM
     assertActive: (taskId, epoch) => leases.assert(taskId, epoch),
     submitGuard,
     workbenchOrigin: options.workbenchOrigin,
+    resolveAuthorizedFilePath: (taskId, materialId) => {
+      const authorized = storage.tasks.listAuthorizedMaterialIds(taskId);
+      const { record, filePath } = materials.resolveAuthorizedFilePath(materialId, authorized);
+      return { filePath, fileName: record.fileName };
+    },
   });
+
+  let agentEngine!: AssembledAgentEngine;
 
   worker = new WorkerProcessSupervisor({
     leases,
@@ -157,6 +164,44 @@ export function createDesktopMainKernel(options: DesktopKernelOptions): DesktopM
         return { wsEndpoint: await cdpBridge.issueEndpoint(taskId, epoch) };
       }
       throw new Error(`未实现的 Worker RPC 方法: ${method}`);
+    },
+    onRunFinished: (ev) => {
+      const task = storage.tasks.getById(ev.taskId);
+      if (!task || task.executionState === 'closed') return;
+      if (ev.endReason === 'model_error' || ev.endReason === 'browser_error') {
+        storage.events.append({
+          id: crypto.randomUUID() as EventId,
+          taskId: ev.taskId,
+          runId: ev.runId,
+          epoch: ev.epoch,
+          type: 'system_notice',
+          payload: {
+            kind: ev.endReason,
+            message: ev.error ?? '本轮执行出现错误，请检查模型配置或网页状态后继续。',
+          },
+          createdAt: new Date().toISOString() as IsoTimestamp,
+        });
+        if (task.executionState === 'running') {
+          taskService.transitionState({
+            taskId: ev.taskId,
+            next: { executionState: 'error', waitingReason: 'manual_control' },
+            reason: ev.endReason,
+            actor: 'system',
+          });
+        }
+      } else if (ev.endReason === 'completed' && task.executionState === 'running') {
+        // Normal turn end returns control to human without ever assuming submission succeeded (INV-01)
+        taskService.transitionState({
+          taskId: ev.taskId,
+          next:
+            task.kind === 'coordinator'
+              ? { executionState: 'draft', waitingReason: 'none' }
+              : { executionState: 'paused', waitingReason: 'manual_control' },
+          reason: 'run_completed_idle',
+          actor: 'system',
+        });
+      }
+      options.onEmitRendererEvent?.({ type: 'tasks_changed', taskId: ev.taskId });
     },
     onRunStoppedAck: (taskId) => {
       taskService.markTakeoverSettled(taskId);
@@ -224,15 +269,26 @@ export function createDesktopMainKernel(options: DesktopKernelOptions): DesktopM
     scheduler,
     workbenchOrigin: options.workbenchOrigin,
     onRevokeAndStopWorker: (taskId, reason) => {
+      agentEngine.questionWaiter.cancelTask(taskId);
+      void agentEngine.runtime.stopTask(taskId, reason);
       worker.stopTask(taskId, reason);
     },
-    onDeliverQuestionAnswer: (taskId, questionCardId, answers) =>
-      worker.deliverQuestionReply(taskId, questionCardId, answers),
-    onTrySpliceMessage: (taskId, input) =>
-      worker.trySpliceMessage(taskId, input.clientMessageId, input.text),
+    onDeliverQuestionAnswer: (taskId, questionCardId, answers) => {
+      const card = storage.hitl.getQuestionCard(questionCardId);
+      if (card && agentEngine.questionWaiter.deliverAnswer(taskId, card.callId, answers)) {
+        return true;
+      }
+      return worker.deliverQuestionReply(taskId, questionCardId, answers);
+    },
+    onTrySpliceMessage: (taskId, input) => {
+      if (agentEngine.runtime.trySpliceUserMessage(taskId, input.clientMessageId, input.text)) {
+        return true;
+      }
+      return worker.trySpliceMessage(taskId, input.clientMessageId, input.text);
+    },
   });
 
-  const agentEngine = assembleDesktopAgentEngine({
+  agentEngine = assembleDesktopAgentEngine({
     storage,
     taskService,
     profiles,

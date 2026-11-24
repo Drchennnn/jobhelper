@@ -118,6 +118,9 @@ export class DesktopIpcRouter implements RendererToMainIpc {
       }
     }
     this.deps.onNotifyTasksChanged?.(task.id);
+    if (!reused && this.deps.storage.providers.getDefault()) {
+      void this.deps.scheduler.drain().catch(() => {});
+    }
     return { taskId: task.id, reused };
   };
 
