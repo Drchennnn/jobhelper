@@ -170,17 +170,20 @@
 **目标**：在 Gate 1 稳固后，逐站验证主流中国招聘 ATS 系统的复杂控件、附件上传、耗时与模型 Token 成本，逐步完善本地 Skills 体系。
 
 ### 交付清单
-- [ ] M6.1 按需适配首批主流站点 Skills（对照 JobHelper 工具契约重写/校验工具示例与读回条件）：
-  - [ ] `ats-beisen`（北森 `*.zhiye.com`）
-  - [ ] `ats-mokahr`（MokaHR `app.mokahr.com`）
-  - [ ] `ats-feishu`（飞书招聘 `*.jobs.feishu.cn`）
-  - [ ] `ats-hotjob` / `ats-hotjob-wt`（大易/WeCruit）
-  - [ ] `ats-iguopin`（国聘）
-  - [ ] `form-controls` + `form-dates`（通用下拉/级联/日期控件）
-- [ ] M6.2 复杂控件专项验证：级联地区选择器、只读日期面板、多段动态增删教育/实习经历区块、大文件 PDF 简历与多证书上传（验证 80 MiB CDP 通道）。
-- [ ] M6.3 多 BYOK 服务商兼容矩阵测试（记录各模型在工具调用准确率、视觉定位能力、单岗位平均步数、耗时与 Token 成本的实测基准）。
-- [ ] M6.4 站点本地经验记忆（`search_memories` / `create_memory`）与 Skill 本地草稿审阅流程打磨。
-- [ ] M6.5 Windows 安装包打包构建与数据目录备份/迁移文档。
+- [x] M6.1 按需适配首批主流站点 Skills（对照 JobHelper 安全工具契约原生编写，零越线脚本与自动打码指令）：
+  - [x] `ats-beisen`（北森 `*.zhiye.com`）
+  - [x] `ats-mokahr`（MokaHR `*.mokahr.com`）
+  - [x] `ats-feishu`（飞书招聘 `*.jobs.feishu.cn`、`jobs.bytedance.com`）
+  - [x] `ats-hotjob` / `ats-hotjob-wt`（大易/WeCruit 现代版与 `/wt/` 经典版）
+  - [x] `ats-iguopin`（国聘 `*.iguopin.com`）
+  - [x] `form-controls` + `form-dates`（通用下拉/搜索/级联/日期控件与多附件规范）
+- [x] M6.2 复杂控件安全原语与专项自动化验证：新增受 `Submit Hard-Guard` 保护的 `act(action="choose_option")`（单选/搜索下拉/多级联选择器）、多文件授权上传（`materialIds` + 全文件名回读）、真实只读 `inspectControl`（含密码脱敏与闸门预检）及三项受控只读探针 `run(probe="dom_summary"|"form_errors"|"custom_control_state")`；覆盖 80 MiB CDP 通道基线。
+- [x] M6.3 多 BYOK 服务商兼容矩阵基准工具（`runByokBenchmarkMatrix` + `npm run benchmark:byok` CLI）：自动化评测能力探测、结构化填表工具调用准确率、耗时、Token 消耗与估算成本并输出 Markdown 基准表（注：真实公网 ATS 线上实测需按用户目标岗位逐步积累，未实测站点不虚标支持）。
+- [x] M6.4 站点本地经验记忆（`search_site_memories` / `save_site_memory`）与 Skill 本地草稿审阅闭环（新增 `submit_skill_draft` 工具 → 设置页 `skills:listDrafts` / `skills:reviewDraft` 审阅批准）。
+- [x] M6.5 Windows 本地数据目录布局、备份迁移与构建打包文档（[docs/DATA_AND_PACKAGING.md](./DATA_AND_PACKAGING.md)）。
+
+### M6 门禁出口条件
+- [x] `npm run clean && npm run build && npm run typecheck && npm --workspace @jobhelper/desktop run build && npm --workspace @jobhelper/workbench run build && npm run test:gate1 && npm test` 全绿（覆盖 8 份原生 Skills 校验、`choose_option`/多附件/`inspectControl`/只读探针测试、BYOK 三协议基准矩阵测试与 Skill 草稿审阅闭环测试）。
 
 ---
 

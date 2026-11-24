@@ -21,6 +21,7 @@
     "test:watch": "vitest",
     "test:gate1": "vitest run fixtures/mock-ats/test/gate1-acceptance.test.ts",
     "mock-ats": "node fixtures/mock-ats/cli.ts",
+    "benchmark:byok": "node fixtures/benchmark/byok-benchmark.ts",
     "clean": "tsc -b --clean"
   },
   "devDependencies": {
